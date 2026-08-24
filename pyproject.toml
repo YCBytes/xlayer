@@ -1,0 +1,94 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "xlayer"
+version = "0.1.0.dev0"
+description = "Pre-release scaffolding for a Python transaction layer for .xlsx workbook changes. No workbook capability is implemented yet."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{ name = "YCBytes" }]
+keywords = ["xlsx", "ooxml", "spreadsheet", "excel"]
+classifiers = [
+  "Development Status :: 1 - Planning",
+  "Intended Audience :: Developers",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Topic :: Office/Business :: Financial :: Spreadsheet",
+  "Typing :: Typed",
+]
+
+# Intentionally empty and load-bearing: the public package must never require
+# the xlayer-core research repository, or any provider SDK, at runtime.
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["ruff>=0.9", "mypy>=1.14", "pytest>=8.0"]
+
+[project.urls]
+Homepage = "https://github.com/YCBytes/xlayer"
+Source = "https://github.com/YCBytes/xlayer"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/xlayer"]
+
+[tool.hatch.build.targets.sdist]
+# Enumerated rather than globbed. Agent-facing design notes live outside this
+# repository entirely; user-facing project docs are a later, separate decision
+# and must be added here deliberately before they ship.
+only-include = [
+  "src",
+  "tests",
+  "LICENSE",
+  "README.md",
+  "pyproject.toml",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+  "E",
+  "F",
+  "W",
+  "I",
+  "N",
+  "UP",
+  "B",
+  "C4",
+  "SIM",
+  "RET",
+  "PTH",
+  "RUF",
+  "TID",
+  "ANN",
+  "S",
+  "ARG",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_unreachable = true
+warn_unused_configs = true
+disallow_any_unimported = true
+enable_error_code = ["ignore-without-code", "redundant-expr", "truthy-bool"]
+files = ["src", "tests"]
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+addopts = "-ra --strict-markers --strict-config --import-mode=importlib"

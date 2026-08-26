@@ -3,11 +3,12 @@
 An open-source Python transaction layer for safe, auditable changes to `.xlsx`
 workbooks.
 
-> **Status: pre-release scaffolding.**
-> No workbook capability is implemented yet. Installing this package gives you a
-> version number and nothing else — nothing here reads, inspects, or modifies a
-> workbook. It is published in this state so that packaging, typing, and release
-> gates can be reviewed before any workbook code lands. Everything under
+> **Status: pre-release. No supported workbook API exists yet.**
+> Internal parsing infrastructure is under construction as private modules, but
+> nothing is exposed: installing this package gives you a version number and no
+> supported way to read, inspect, or modify a workbook. It is published in this
+> state so that packaging, typing, and release gates can be reviewed while
+> capability is promoted one tested slice at a time. Everything under
 > "Intended design" below is a target, not current behaviour.
 
 ## The problem
@@ -71,7 +72,8 @@ xlayer.__version__  # "0.1.0.dev0"
 ```
 
 There is no public API beyond that version string, and a test in this repository
-enforces it.
+enforces it. Internal parsing infrastructure is being built inside the package
+as private modules, but none of it is exposed or supported yet.
 
 ## Scope boundaries
 

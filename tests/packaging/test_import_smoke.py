@@ -29,6 +29,9 @@ def test_xlayer_core_is_not_importable() -> None:
 
 
 def test_no_workbook_capability_is_exported() -> None:
+    # Full-strength gate: every internal module is underscore-prefixed
+    # (_errors, _ooxml), so even Python's submodule binding cannot place a
+    # public name on the package before the slice ships.
     assert xlayer.__all__ == ["__version__"]
     public = [name for name in vars(xlayer) if not name.startswith("_")]
     assert public == []

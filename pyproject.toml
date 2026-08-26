@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "xlayer"
 version = "0.1.0.dev0"
-description = "Pre-release scaffolding for a Python transaction layer for .xlsx workbook changes. No workbook capability is implemented yet."
+description = "Pre-release scaffolding for a Python transaction layer for .xlsx workbook changes. Internal infrastructure only; no supported workbook API yet."
 readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"

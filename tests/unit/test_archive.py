@@ -267,8 +267,18 @@ class TestEntryRefusals:
         expect_refusal(load(path), "unsafe_archive_path")
 
     def test_backslash_entry_name(self, tmp_path: Path) -> None:
-        path = build_zip(tmp_path / "back.xlsx", {"bad\\name.xml": _XML})
-        expect_refusal(load(path), "unsafe_archive_path")
+        # ZipInfo.__init__ rewrites os.sep to "/", so on Windows a name passed
+        # as "bad\\name.xml" would be stored as the perfectly legal
+        # "bad/name.xml". Assigning filename after construction bypasses that
+        # normalization, so the literal backslash reaches the archive on every
+        # platform - which is what a non-Python packer can produce.
+        path = tmp_path / "back.xlsx"
+        with zipfile.ZipFile(path, "w") as zf:
+            info = zipfile.ZipInfo("placeholder.xml")
+            info.filename = "bad\\name.xml"
+            zf.writestr(info, _XML)
+        refusal = expect_refusal(load(path), "unsafe_archive_path")
+        assert refusal.details["reason"] == "backslash in path"
 
     def test_drive_prefixed_entry_name(self, tmp_path: Path) -> None:
         path = build_zip(tmp_path / "drive.xlsx", {"C:evil.xml": _XML})

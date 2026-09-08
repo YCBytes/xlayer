@@ -44,6 +44,8 @@ _CFB_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
 _ZIP_MAGIC_PREFIXES = (b"PK\x03\x04", b"PK\x05\x06")
 
 _ENCRYPTED_FLAG_BIT = 0x1
+# General-purpose flag bit 11: entry name and comment are UTF-8 (else cp437).
+_UTF8_NAME_FLAG_BIT = 0x800
 _SUPPORTED_COMPRESSION = (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED)
 
 # End-of-central-directory record: fixed 22 bytes plus up to 65535 comment
@@ -176,6 +178,11 @@ def _validate_entry_name(name: str) -> Refusal | None:
     unsafe_reason: str | None = None
     if not name:
         unsafe_reason = "empty entry name"
+    elif any(ord(ch) < 0x20 or ch == "\x7f" for ch in name):
+        # ZipInfo truncates names at the first NUL, so "a.xml\x00../x" would
+        # otherwise be seen by the stdlib as "a.xml" while carrying hidden
+        # bytes in the archive.
+        unsafe_reason = "control character in path"
     elif name.startswith("/"):
         unsafe_reason = "absolute path"
     elif "\\" in name:
@@ -204,7 +211,29 @@ def _malformed_archive(reason: str, **details: object) -> Refusal:
     )
 
 
-def _preflight_central_directory(raw: bytes, limits: ArchiveLimits) -> int | Refusal:
+def _decode_entry_name(raw_name: bytes, flags: int) -> str | Refusal:
+    """Decode a central-directory name exactly as the stdlib would.
+
+    Done here, on the raw bytes, for two reasons. First, ``ZipInfo.__init__``
+    post-processes names (``os.sep`` becomes ``/``, the name is cut at the
+    first NUL), so validating ``ZipInfo.filename`` is platform-dependent: a
+    ``bad\\name.xml`` entry is refused on POSIX and silently accepted as
+    ``bad/name.xml`` on Windows. Second, an invalid UTF-8 name with the UTF-8
+    flag set makes ``ZipFile`` raise ``UnicodeDecodeError``, which is not a
+    ``BadZipFile`` and would escape as an unstructured exception.
+    """
+    encoding = "utf-8" if flags & _UTF8_NAME_FLAG_BIT else "cp437"
+    try:
+        return raw_name.decode(encoding)
+    except UnicodeDecodeError:
+        return _malformed_archive(
+            "entry name is not valid in its declared encoding",
+            encoding=encoding,
+            raw_name=raw_name.hex(),
+        )
+
+
+def _preflight_central_directory(raw: bytes, limits: ArchiveLimits) -> tuple[str, ...] | Refusal:
     """Walk the actual central-directory records before ``ZipFile`` exists.
 
     The stdlib parses the central directory by *size*, not by the declared
@@ -217,6 +246,11 @@ def _preflight_central_directory(raw: bytes, limits: ArchiveLimits) -> int | Ref
     directory must end exactly where the EOCD record begins, nothing may
     follow the EOCD beyond its declared comment, and the first local file
     header must sit at byte zero.
+
+    Entry names are decoded and validated from the raw record bytes so the
+    verdict is identical on every platform (see :func:`_decode_entry_name`).
+    Returns the raw names in record order; the caller reconciles them against
+    what ``ZipFile`` reports.
     """
     tail = raw[-_EOCD_MAX_SCAN:]
     position = tail.rfind(_EOCD_SIGNATURE)
@@ -260,7 +294,7 @@ def _preflight_central_directory(raw: bytes, limits: ArchiveLimits) -> int | Ref
             eocd_position=eocd_absolute,
         )
 
-    count = 0
+    names: list[str] = []
     offset = cd_offset
     end = cd_offset + cd_size
     min_local_offset: int | None = None
@@ -269,13 +303,23 @@ def _preflight_central_directory(raw: bytes, limits: ArchiveLimits) -> int | Ref
             return _malformed_archive("record signature mismatch", at_offset=offset)
         if end - offset < _CENTRAL_HEADER_FIXED_SIZE:
             return _malformed_archive("truncated central-directory record", at_offset=offset)
+        (flags,) = struct.unpack_from("<H", raw, offset + 8)
         name_len, extra_len, record_comment_len = struct.unpack_from("<HHH", raw, offset + 28)
         (local_offset,) = struct.unpack_from("<I", raw, offset + 42)
+        name_start = offset + _CENTRAL_HEADER_FIXED_SIZE
+        if name_start + name_len > end:
+            return _malformed_archive("entry name overruns the central directory", at_offset=offset)
+        name = _decode_entry_name(raw[name_start : name_start + name_len], flags)
+        if isinstance(name, Refusal):
+            return name
+        name_refusal = _validate_entry_name(name)
+        if name_refusal is not None:
+            return name_refusal
         if min_local_offset is None or local_offset < min_local_offset:
             min_local_offset = local_offset
-        offset += _CENTRAL_HEADER_FIXED_SIZE + name_len + extra_len + record_comment_len
-        count += 1
-        if count > limits.max_part_count:
+        offset = name_start + name_len + extra_len + record_comment_len
+        names.append(name)
+        if len(names) > limits.max_part_count:
             return Refusal(
                 code="archive_too_many_parts",
                 message=f"Archive contains more than {limits.max_part_count} "
@@ -285,18 +329,18 @@ def _preflight_central_directory(raw: bytes, limits: ArchiveLimits) -> int | Ref
             )
     if offset != end:
         return _malformed_archive("trailing bytes inside the central directory")
-    if count != total_entries:
+    if len(names) != total_entries:
         return _malformed_archive(
             "record count does not match the declared entry count",
-            actual_records=count,
+            actual_records=len(names),
             declared_entries=total_entries,
         )
-    if count > 0 and min_local_offset != 0:
+    if names and min_local_offset != 0:
         return _malformed_archive(
             "data precedes the first local file header (prefixed or concatenated archive)",
             first_local_offset=min_local_offset,
         )
-    return count
+    return tuple(names)
 
 
 class WorkbookArchive:
@@ -371,9 +415,9 @@ class WorkbookArchive:
                 recovery_options=_RECOVER_VALID_XLSX,
             )
 
-        record_count = _preflight_central_directory(raw, limits)
-        if isinstance(record_count, Refusal):
-            return record_count
+        raw_names = _preflight_central_directory(raw, limits)
+        if isinstance(raw_names, Refusal):
+            return raw_names
 
         try:
             zip_file = zipfile.ZipFile(io.BytesIO(raw))
@@ -386,20 +430,26 @@ class WorkbookArchive:
             )
 
         infos = zip_file.infolist()
-        if len(infos) != record_count:
+        if len(infos) != len(raw_names):
             return _malformed_archive(
                 "the stdlib parsed a different entry count than the central-directory walk",
                 stdlib_entries=len(infos),
-                walked_records=record_count,
+                walked_records=len(raw_names),
             )
         seen: set[str] = set()
         order: list[str] = []
         declared_total = 0
-        for info in infos:
+        for info, raw_name in zip(infos, raw_names, strict=True):
             name = info.filename
-            name_refusal = _validate_entry_name(name)
-            if name_refusal is not None:
-                return name_refusal
+            if name != raw_name:
+                # The raw names were already validated; the stdlib must not have
+                # rewritten any of them, or downstream code would operate on a
+                # different name than the one the archive actually carries.
+                return _malformed_archive(
+                    "the stdlib reported an entry name that differs from the raw record",
+                    raw_name=raw_name,
+                    stdlib_name=name,
+                )
             if info.flag_bits & _ENCRYPTED_FLAG_BIT:
                 return Refusal(
                     code="encrypted_archive_entry",

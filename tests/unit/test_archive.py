@@ -267,18 +267,68 @@ class TestEntryRefusals:
         expect_refusal(load(path), "unsafe_archive_path")
 
     def test_backslash_entry_name(self, tmp_path: Path) -> None:
-        # ZipInfo.__init__ rewrites os.sep to "/", so on Windows a name passed
-        # as "bad\\name.xml" would be stored as the perfectly legal
-        # "bad/name.xml". Assigning filename after construction bypasses that
-        # normalization, so the literal backslash reaches the archive on every
-        # platform - which is what a non-Python packer can produce.
+        # ZipInfo.__init__ rewrites os.sep to "/" on both write and read, so
+        # on Windows "bad\\name.xml" would be stored - and, if we validated
+        # ZipInfo.filename, read back - as the perfectly legal "bad/name.xml".
+        # Assigning filename after construction puts the literal backslash in
+        # the archive (what a non-Python packer produces); the archive layer
+        # must validate the raw central-directory bytes so the verdict is the
+        # same on every platform.
         path = tmp_path / "back.xlsx"
         with zipfile.ZipFile(path, "w") as zf:
             info = zipfile.ZipInfo("placeholder.xml")
             info.filename = "bad\\name.xml"
             zf.writestr(info, _XML)
+        assert b"bad\\name.xml" in path.read_bytes()
         refusal = expect_refusal(load(path), "unsafe_archive_path")
         assert refusal.details["reason"] == "backslash in path"
+        assert refusal.details["entry"] == "bad\\name.xml"
+
+    def test_nul_in_entry_name(self, tmp_path: Path) -> None:
+        # ZipInfo.__init__ truncates at the first NUL, so the stdlib would see
+        # this entry as "a.xml" while the archive carries a traversal suffix.
+        path = tmp_path / "nul.xlsx"
+        with zipfile.ZipFile(path, "w") as zf:
+            info = zipfile.ZipInfo("placeholder.xml")
+            info.filename = "a.xml\x00../evil.xml"
+            zf.writestr(info, _XML)
+        refusal = expect_refusal(load(path), "unsafe_archive_path")
+        assert refusal.details["reason"] == "control character in path"
+
+    def test_invalid_utf8_entry_name_is_refused_not_raised(self, tmp_path: Path) -> None:
+        # With flag bit 11 set the stdlib decodes the name as UTF-8 and raises
+        # UnicodeDecodeError (not BadZipFile) from ZipFile(); that must surface
+        # as a structured refusal from the preflight instead.
+        path = build_zip(tmp_path / "utf8.xlsx", {"ab.xml": _XML})
+        raw = bytearray(path.read_bytes())
+        bad_name = b"\xff\xfe.xml"  # same length as "ab.xml", invalid UTF-8
+        local = raw.find(b"PK\x03\x04")
+        central = raw.find(b"PK\x01\x02")
+        assert local != -1 and central != -1
+        # Flags are a little-endian u16 (local header +6, central record +8);
+        # bit 11 (0x0800) is bit 3 of the high byte.
+        raw[local + 7] |= 0x08
+        raw[local + 30 : local + 36] = bad_name
+        raw[central + 9] |= 0x08
+        raw[central + 46 : central + 52] = bad_name
+        path.write_bytes(bytes(raw))
+        refusal = expect_refusal(load(path), "malformed_archive")
+        assert refusal.details["encoding"] == "utf-8"
+
+    def test_cp437_entry_name_decodes_like_stdlib(self, tmp_path: Path) -> None:
+        # Without flag bit 11 names are cp437; a high byte must decode the same
+        # way the stdlib does so the raw/stdlib reconciliation still agrees.
+        path = build_zip(tmp_path / "cp437.xlsx", {"ab.xml": _XML})
+        raw = bytearray(path.read_bytes())
+        local = raw.find(b"PK\x03\x04")
+        central = raw.find(b"PK\x01\x02")
+        assert local != -1 and central != -1
+        raw[local + 30] = 0x80  # cp437 0x80 -> "Ç"
+        raw[central + 46] = 0x80
+        path.write_bytes(bytes(raw))
+        archive = expect_archive(load(path))
+        assert archive.part_names() == ("Çb.xml",)
+        archive.close()
 
     def test_drive_prefixed_entry_name(self, tmp_path: Path) -> None:
         path = build_zip(tmp_path / "drive.xlsx", {"C:evil.xml": _XML})

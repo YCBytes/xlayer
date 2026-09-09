@@ -17,9 +17,9 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 DIST_DIR = REPO_ROOT / "dist"
 
 # Everything the wheel may contain outside its .dist-info metadata directory.
-# Slice 1 Part 1A adds the refusal envelope and the internal archive/package
-# layers; all are underscore-prefixed and nothing is exported publicly until
-# the full slice passes its gates.
+# Slice 1 adds the refusal envelope and the internal archive, package,
+# and workbook-registry layers; all are underscore-prefixed and nothing is
+# exported publicly until the full slice passes its gates.
 WHEEL_PAYLOAD = frozenset(
     {
         "xlayer/__init__.py",
@@ -28,6 +28,7 @@ WHEEL_PAYLOAD = frozenset(
         "xlayer/_ooxml/__init__.py",
         "xlayer/_ooxml/archive.py",
         "xlayer/_ooxml/package.py",
+        "xlayer/_ooxml/workbook.py",
     }
 )
 
@@ -74,14 +75,23 @@ def test_wheel_ships_the_license() -> None:
 # payload is derived from WHEEL_PAYLOAD so the sdist cannot silently drop a
 # module the wheel ships (hatchling ignores missing only-include entries
 # rather than erroring).
-REQUIRED_SDIST_FILES = frozenset(
-    {
-        "LICENSE",
-        "README.md",
-        "pyproject.toml",
-        "PKG-INFO",
+REQUIRED_SDIST_FILES = (
+    frozenset(
+        {
+            "LICENSE",
+            "README.md",
+            "pyproject.toml",
+            "PKG-INFO",
+        }
+    )
+    | {f"src/{payload_path}" for payload_path in WHEEL_PAYLOAD}
+    | {
+        "tests/fixtures/test_workbook_2_registry.xlsx",
+        "tests/fixtures/test_workbook_2_registry.expected.json",
+        "tests/fixtures/test_workbook_6b_1904.xlsx",
+        "tests/fixtures/test_workbook_6b_1904.expected.json",
     }
-) | {f"src/{payload_path}" for payload_path in WHEEL_PAYLOAD}
+)
 
 
 def _sdist_relative_files() -> list[str]:

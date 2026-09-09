@@ -1,0 +1,79 @@
+{
+  "workbook_path": "xl/workbook.xml",
+  "active_tab": 4,
+  "date1904": false,
+  "external_reference_ids": [],
+  "sheets": [
+    {
+      "name": "USC - Hedging",
+      "sheet_id": 1,
+      "rel_id": "rId1",
+      "state": "visible",
+      "tab_index": 0,
+      "kind": "worksheet",
+      "part_path": "xl/worksheets/sheet1.xml"
+    },
+    {
+      "name": "Visible Two",
+      "sheet_id": 5,
+      "rel_id": "rId2",
+      "state": "visible",
+      "tab_index": 1,
+      "kind": "worksheet",
+      "part_path": "xl/worksheets/sheet2.xml"
+    },
+    {
+      "name": "Hidden Sheet",
+      "sheet_id": 3,
+      "rel_id": "rId3",
+      "state": "hidden",
+      "tab_index": 2,
+      "kind": "worksheet",
+      "part_path": "xl/worksheets/sheet3.xml"
+    },
+    {
+      "name": "Very Hidden",
+      "sheet_id": 4,
+      "rel_id": "rId4",
+      "state": "veryHidden",
+      "tab_index": 3,
+      "kind": "worksheet",
+      "part_path": "xl/worksheets/sheet4.xml"
+    },
+    {
+      "name": "Visible One",
+      "sheet_id": 2,
+      "rel_id": "rId5",
+      "state": "visible",
+      "tab_index": 4,
+      "kind": "worksheet",
+      "part_path": "xl/worksheets/sheet5.xml"
+    }
+  ],
+  "defined_names": [
+    {
+      "name": "BrokenRef",
+      "text": "#REF!",
+      "scope_sheet": null,
+      "is_hidden": false
+    },
+    {
+      "name": "GlobalRef",
+      "text": "'Visible Two'!$B$1",
+      "scope_sheet": null,
+      "is_hidden": false
+    },
+    {
+      "name": "HedgeRates",
+      "text": "'Visible One'!$B$1:$B$3",
+      "scope_sheet": "USC - Hedging",
+      "is_hidden": false
+    },
+    {
+      "name": "HiddenRange",
+      "text": "'Visible One'!$A$1",
+      "scope_sheet": null,
+      "is_hidden": true
+    }
+  ]
+}

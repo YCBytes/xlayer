@@ -82,6 +82,8 @@ _KNOWN_UNSUPPORTED_MAIN_CONTENT_TYPES = {
 # relationships. Matching is by full URI equality, never by suffix.
 SUPPORTED_WORKBOOK_REL_TYPES = {
     "worksheet": _OFFICE_REL_BASE + "worksheet",
+    "chartsheet": _OFFICE_REL_BASE + "chartsheet",
+    "dialogsheet": _OFFICE_REL_BASE + "dialogsheet",
     "styles": _OFFICE_REL_BASE + "styles",
     "sharedStrings": _OFFICE_REL_BASE + "sharedStrings",
     "calcChain": _OFFICE_REL_BASE + "calcChain",

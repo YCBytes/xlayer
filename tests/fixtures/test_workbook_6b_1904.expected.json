@@ -1,0 +1,18 @@
+{
+  "workbook_path": "xl/workbook.xml",
+  "active_tab": 0,
+  "date1904": true,
+  "external_reference_ids": [],
+  "sheets": [
+    {
+      "name": "Date 1904 Test",
+      "sheet_id": 1,
+      "rel_id": "rId1",
+      "state": "visible",
+      "tab_index": 0,
+      "kind": "worksheet",
+      "part_path": "xl/worksheets/sheet1.xml"
+    }
+  ],
+  "defined_names": []
+}

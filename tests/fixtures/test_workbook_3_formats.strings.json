@@ -1,0 +1,6 @@
+[
+  "normal string before rich text",
+  "Hello World",
+  "  leading spaces preserved  ",
+  "plain string after"
+]

@@ -1,0 +1,26 @@
+[
+  {
+    "index": 0,
+    "format_id": 0,
+    "format_code": "General",
+    "temporal_kind": "non_temporal"
+  },
+  {
+    "index": 1,
+    "format_id": 165,
+    "format_code": "yyyy-mm-dd",
+    "temporal_kind": "date"
+  },
+  {
+    "index": 2,
+    "format_id": 166,
+    "format_code": "hh:mm:ss",
+    "temporal_kind": "time"
+  },
+  {
+    "index": 3,
+    "format_id": 167,
+    "format_code": "yyyy-mm-dd hh:mm:ss",
+    "temporal_kind": "date-time"
+  }
+]

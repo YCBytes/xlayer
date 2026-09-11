@@ -1,0 +1,83 @@
+{
+  "cell_xf_count": 202,
+  "indexes": [
+    {
+      "index": 0,
+      "format_id": 0,
+      "format_code": "General",
+      "temporal_kind": "non_temporal"
+    },
+    {
+      "index": 1,
+      "format_id": 165,
+      "format_code": "MM/DD/YY",
+      "temporal_kind": "date"
+    },
+    {
+      "index": 2,
+      "format_id": 166,
+      "format_code": "D-MMM-YY",
+      "temporal_kind": "date"
+    },
+    {
+      "index": 3,
+      "format_id": 168,
+      "format_code": "H:MM AM/PM",
+      "temporal_kind": "time"
+    },
+    {
+      "index": 4,
+      "format_id": 169,
+      "format_code": "DD/MM/YYYY",
+      "temporal_kind": "date"
+    },
+    {
+      "index": 5,
+      "format_id": 170,
+      "format_code": "HH:MM:SS",
+      "temporal_kind": "time"
+    },
+    {
+      "index": 6,
+      "format_id": 10,
+      "format_code": "0.00%",
+      "temporal_kind": "non_temporal"
+    },
+    {
+      "index": 7,
+      "format_id": 171,
+      "format_code": "[$-409]DD/MM/YYYY",
+      "temporal_kind": "date"
+    },
+    {
+      "index": 10,
+      "format_id": 1,
+      "format_code": "0",
+      "temporal_kind": "non_temporal"
+    },
+    {
+      "index": 11,
+      "format_id": 174,
+      "format_code": "0.0",
+      "temporal_kind": "non_temporal"
+    },
+    {
+      "index": 15,
+      "format_id": 172,
+      "format_code": "0.000",
+      "temporal_kind": "non_temporal"
+    },
+    {
+      "index": 22,
+      "format_id": 49,
+      "format_code": "@",
+      "temporal_kind": "non_temporal"
+    },
+    {
+      "index": 26,
+      "format_id": 173,
+      "format_code": "#,##0.000",
+      "temporal_kind": "non_temporal"
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+[
+  "Sheet 1 - Visible",
+  "Sheet 2 - Visible, name has spaces and hyphen",
+  "Sheet 5 - Visible",
+  "Sheet 3 - Hidden",
+  "you should not see this tab",
+  "Sheet 4 - Very Hidden",
+  "completely invisible"
+]

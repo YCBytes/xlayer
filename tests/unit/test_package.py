@@ -108,6 +108,25 @@ class TestHappyPath:
         assert package.resolve_workbook_rel("styles") == "xl/styles.xml"
         assert package.resolve_workbook_rel("sharedStrings") is None
 
+    def test_find_workbook_rel_distinguishes_absence_from_unusable(self, tmp_path: Path) -> None:
+        package = expect_package(parse_package(make_archive(tmp_path, _MINIMAL_PARTS)))
+        styles = package.find_workbook_rel("styles")
+        assert styles is not None
+        assert styles.target == "styles.xml"
+        assert package.find_workbook_rel("sharedStrings") is None
+
+        parts = dict(_MINIMAL_PARTS)
+        parts["xl/_rels/workbook.xml.rels"] = _WORKBOOK_RELS.replace(
+            b'Target="styles.xml"', b'Target="../../evil.xml"'
+        )
+        broken_dir = tmp_path / "broken"
+        broken_dir.mkdir()
+        broken = expect_package(parse_package(make_archive(broken_dir, parts)))
+        found = broken.find_workbook_rel("styles")
+        assert found is not None
+        assert found.target == "../../evil.xml"
+        assert broken.resolve_workbook_rel("styles") is None
+
     def test_unknown_rel_kind_is_a_programming_error(self, tmp_path: Path) -> None:
         package = expect_package(parse_package(make_archive(tmp_path, _MINIMAL_PARTS)))
         with pytest.raises(KeyError):

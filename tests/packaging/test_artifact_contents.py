@@ -18,8 +18,9 @@ DIST_DIR = REPO_ROOT / "dist"
 
 # Everything the wheel may contain outside its .dist-info metadata directory.
 # Slice 1 adds the refusal envelope and the internal archive, package,
-# and workbook-registry layers; all are underscore-prefixed and nothing is
-# exported publicly until the full slice passes its gates.
+# workbook-registry, shared-string, and styles layers; all are
+# underscore-prefixed and nothing is exported publicly until the full
+# slice passes its gates.
 WHEEL_PAYLOAD = frozenset(
     {
         "xlayer/__init__.py",
@@ -29,6 +30,8 @@ WHEEL_PAYLOAD = frozenset(
         "xlayer/_ooxml/archive.py",
         "xlayer/_ooxml/package.py",
         "xlayer/_ooxml/workbook.py",
+        "xlayer/_ooxml/strings.py",
+        "xlayer/_ooxml/styles.py",
     }
 )
 
@@ -88,8 +91,13 @@ REQUIRED_SDIST_FILES = (
     | {
         "tests/fixtures/test_workbook_2_registry.xlsx",
         "tests/fixtures/test_workbook_2_registry.expected.json",
+        "tests/fixtures/test_workbook_2_registry.strings.json",
         "tests/fixtures/test_workbook_6b_1904.xlsx",
         "tests/fixtures/test_workbook_6b_1904.expected.json",
+        "tests/fixtures/test_workbook_6b_1904.styles.json",
+        "tests/fixtures/test_workbook_3_formats.xlsx",
+        "tests/fixtures/test_workbook_3_formats.strings.json",
+        "tests/fixtures/test_workbook_3_formats.styles.json",
     }
 )
 

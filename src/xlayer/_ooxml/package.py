@@ -141,6 +141,20 @@ class PackageInfo:
         candidate = cleaned if cleaned.startswith("/") else f"{self.workbook_dir}/{cleaned}"
         return normalize_package_path(candidate)
 
+    def find_workbook_rel(self, rel_kind: str) -> Relationship | None:
+        """Return the first workbook relationship of ``rel_kind``, or ``None``.
+
+        Unlike :meth:`resolve_workbook_rel`, this does not interpret the
+        target. Callers that default on absence must use this first so an
+        external or unresolvable relationship is not treated as missing.
+        ``rel_kind`` must be a key of :data:`SUPPORTED_WORKBOOK_REL_TYPES`.
+        """
+        exact_type = SUPPORTED_WORKBOOK_REL_TYPES[rel_kind]
+        for rel in self.workbook_rels.values():
+            if rel.rel_type == exact_type:
+                return rel
+        return None
+
     def resolve_workbook_rel(self, rel_kind: str) -> str | None:
         """Resolve a supported workbook relationship kind (e.g. ``"styles"``).
 
@@ -149,11 +163,10 @@ class PackageInfo:
         path, or ``None`` when the relationship is absent, external, or its
         target is unresolvable.
         """
-        exact_type = SUPPORTED_WORKBOOK_REL_TYPES[rel_kind]
-        for rel in self.workbook_rels.values():
-            if rel.rel_type == exact_type:
-                return self._resolve_target(rel)
-        return None
+        rel = self.find_workbook_rel(rel_kind)
+        if rel is None:
+            return None
+        return self._resolve_target(rel)
 
     def resolve_workbook_rel_by_id(self, rel_id: str, expected_kind: str) -> str | None:
         """Resolve a workbook relationship by r:id, requiring an exact kind.

@@ -1,0 +1,56 @@
+{
+  "cell_types": {
+    "part_path": "xl/worksheets/sheet1.xml",
+    "declared_dimension": "A1:C23",
+    "used_range": "A1:C23",
+    "cells": {
+      "B2": {"stored_type": "s", "value_kind": "string", "raw": "4", "stored_value": "Hello from shared strings", "formula": null},
+      "B3": {"stored_type": "str", "value_kind": "string", "raw": "Mar-25", "stored_value": "Mar-25", "formula": {"text": "TEXT(DATE(2025,3,31),\"MMM-YY\")", "kind": "normal"}},
+      "B4": {"stored_type": "b", "value_kind": "boolean", "raw": "1", "stored_value": true, "formula": null},
+      "B5": {"stored_type": "b", "value_kind": "boolean", "raw": "0", "stored_value": false, "formula": null},
+      "B6": {"stored_type": "e", "value_kind": "error", "raw": "#DIV/0!", "stored_value": "#DIV/0!", "formula": {"text": "1/0", "kind": "normal"}},
+      "B7": {"stored_type": "e", "value_kind": "error", "raw": "#REF!", "stored_value": "#REF!", "formula": null},
+      "B13": {"stored_type": "n", "value_kind": "number", "raw": "42.5", "stored_value": 42.5, "formula": null},
+      "B14": {"stored_type": "n", "value_kind": "number", "raw": "45747", "stored_value": 45747.0, "style_index": 2, "temporal_kind": "date"},
+      "B15": {"stored_type": "n", "value_kind": "number", "raw": "0.60416666666666663", "style_index": 3, "temporal_kind": "time"},
+      "B16": {"stored_type": "n", "value_kind": "blank", "raw": null, "stored_value": null, "style_index": 4, "temporal_kind": "non_temporal"}
+    }
+  },
+  "formulas": {
+    "part_path": "xl/worksheets/sheet3.xml",
+    "cells": {
+      "B2": {"formula": {"text": "10 + 25", "kind": "normal"}, "stored_value": 35.0, "raw": "35"},
+      "B8": {"formula": {"text": "E8*F8", "kind": "shared", "shared_index": 0, "ref": "B8:B11"}, "stored_value": 1000.0},
+      "B9": {"formula": {"text": null, "kind": "shared", "shared_index": 0}, "stored_value": 4000.0},
+      "B18": {"formula": {"text": "TODAY()", "kind": "normal", "calculate_on_next_recalc": true}, "raw": "46107", "stored_value": 46107.0},
+      "B23": {"formula": {"text": "SUMPRODUCT(ref_data!$A$2:$A$11,ref_data!$B$2:$B$11)", "kind": "array", "ref": "B23"}, "stored_value": 5156002.5}
+    },
+    "shared_formulas": {
+      "0": {"master": "B8", "ref": "B8:B11", "text": "E8*F8"}
+    }
+  },
+  "merged_cells": {
+    "part_path": "xl/worksheets/sheet4.xml",
+    "merges": ["A11:A14", "D16:F16", "A2:D2", "A1:H1", "A18:B22", "E2:H2", "A16:C16", "A15:B15"],
+    "cells": {
+      "A1": {"merge_ref": "A1:H1"},
+      "H1": {"merge_ref": "A1:H1"},
+      "B11": {"formula": {"text": "SUM(B4:B9)", "kind": "shared", "shared_index": 0, "ref": "B11:H11"}, "stored_value": 2100.0},
+      "C11": {"formula": {"text": null, "kind": "shared", "shared_index": 0}, "stored_value": 31510.5}
+    }
+  },
+  "empty_sheet": {
+    "part_path": "xl/worksheets/sheet10.xml",
+    "declared_dimension": "A1",
+    "used_range": null,
+    "cell_count": 0
+  },
+  "single_cell": {
+    "part_path": "xl/worksheets/sheet12.xml",
+    "declared_dimension": "A1",
+    "used_range": "A1",
+    "cells": {
+      "A1": {"stored_type": "n", "value_kind": "number", "raw": "42", "stored_value": 42.0}
+    }
+  }
+}

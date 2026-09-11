@@ -1,0 +1,24 @@
+{
+  "sheet": "edges",
+  "part_path": "xl/worksheets/sheet1.xml",
+  "declared_dimension": "A1:F20",
+  "used_range": "A1:F10",
+  "other_elements": [
+    "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}sheetViews",
+    "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}sheetFormatPr"
+  ],
+  "cell_count": 14,
+  "merges": [
+    {"ref": "B10:C10", "first_cell": "B10", "last_cell": "C10"}
+  ],
+  "cells": {
+    "A1": {"stored_type": "n", "value_kind": "number", "raw": "100", "stored_value": 100.0, "style_index": 4, "temporal_kind": "non_temporal"},
+    "B1": {"stored_type": "inlineStr", "value_kind": "string", "raw": null, "stored_value": "label", "style_index": 0, "temporal_kind": "non_temporal"},
+    "C1": {"stored_type": "n", "value_kind": "number", "raw": "0.25", "stored_value": 0.25, "style_index": 1, "temporal_kind": "non_temporal"},
+    "D1": {"stored_type": "n", "value_kind": "number", "raw": "45658", "stored_value": 45658.0, "style_index": 2, "temporal_kind": "date"},
+    "E1": {"stored_type": "n", "value_kind": "number", "raw": "9.99", "stored_value": 9.99, "style_index": 3, "temporal_kind": "non_temporal"},
+    "F1": {"stored_type": "n", "value_kind": "number", "raw": "42", "stored_value": 42.0, "style_index": 0, "temporal_kind": "non_temporal"},
+    "A10": {"stored_type": "n", "value_kind": "number", "raw": "10", "stored_value": 10.0, "style_index": 4, "temporal_kind": "non_temporal"}
+  },
+  "absent": ["B10", "C10", "A3"]
+}

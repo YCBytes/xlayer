@@ -18,6 +18,8 @@ deliberate:
 
 from __future__ import annotations
 
+import bisect
+import heapq
 import math
 import re
 from collections.abc import Mapping, Sequence
@@ -26,7 +28,14 @@ from types import MappingProxyType
 from xml.etree import ElementTree as ET
 
 from xlayer._errors import Refusal
-from xlayer._ooxml._text import decode_excel_escapes, decode_rich_text, inherited_space
+from xlayer._ooxml._text import (
+    NESTED_MARKUP_REASON,
+    SURROGATE_REASON,
+    TextError,
+    decode_excel_escapes,
+    decode_rich_text,
+    inherited_space,
+)
 from xlayer._ooxml.archive import WorkbookArchive
 from xlayer._ooxml.styles import StyleInfo
 from xlayer._ooxml.workbook import SheetEntry
@@ -47,6 +56,12 @@ _MAX_UINT = 4_294_967_295
 _MAX_UINT_DIGITS = 10
 _MAX_ROW = 1_048_576
 _MAX_COL = 16_384  # XFD
+
+# Explicit bound on merge work. Overlap checking and cell-to-merge lookup are
+# both swept rather than compared pairwise, but the count is still capped so
+# the cost per worksheet is bounded by something other than the XML element
+# limit. Real workbooks in the corpus peak at fewer than a hundred merges.
+MAX_MERGE_RANGES = 65_536
 _ADDRESS_RE = re.compile(r"^([A-Z]{1,3})([1-9][0-9]{0,6})$")
 _NUMBER_RE = re.compile(r"^[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$")
 _DATE_RE = re.compile(r"^([0-9]{4})-([0-9]{2})-([0-9]{2})$")
@@ -55,12 +70,18 @@ _KNOWN_CELL_TYPES = frozenset({"n", "s", "str", "inlineStr", "b", "e", "d"})
 _MONTH_DAYS = (0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
 _XML_TRUE = frozenset({"true", "1"})
 _XML_FALSE = frozenset({"false", "0"})
+# ECMA-376 ST_CellFormulaType. "normal" is the default, and may be either
+# omitted or spelled out; both forms mean the same thing.
 _FORMULA_KINDS = {
     None: "normal",
+    "normal": "normal",
     "shared": "shared",
     "array": "array",
     "dataTable": "data_table",
 }
+# Kinds whose formula expression is stored as text. A shared follower and a
+# data table define themselves through attributes instead.
+_FORMULA_KINDS_REQUIRING_TEXT = frozenset({"normal", "array"})
 
 _RECOVER_TRUSTED_SOURCE = ({"action": "regenerate_workbook_from_trusted_source"},)
 
@@ -206,12 +227,8 @@ def parse_worksheet(
     checked = _check_shared_followers(part, cells, shared_formulas, followers)
     if isinstance(checked, Refusal):
         return checked
-
     if merges:
-        cells = {
-            address: replace(cell, merge_ref=_merge_ref_for(cell, merges))
-            for address, cell in cells.items()
-        }
+        cells = _assign_merge_refs(cells, merges)
 
     return Worksheet(
         name=sheet.name,
@@ -231,8 +248,13 @@ def _parse_merges(root: ET.Element, part: str) -> tuple[MergeRange, ...] | Refus
         return _invalid_part(part, "duplicate mergeCells")
     if not blocks:
         return ()
+    merge_elems = blocks[0].findall(_MERGE_CELL_TAG)
+    if len(merge_elems) > MAX_MERGE_RANGES:
+        return _invalid_part(
+            part, "too many merge ranges", count=len(merge_elems), limit=MAX_MERGE_RANGES
+        )
     ranges: list[MergeRange] = []
-    for merge_elem in blocks[0].findall(_MERGE_CELL_TAG):
+    for merge_elem in merge_elems:
         ref = merge_elem.attrib.get("ref")
         if not ref or ":" not in ref:
             return _invalid_part(part, "invalid merge ref", ref=ref)
@@ -251,32 +273,87 @@ def _parse_merges(root: ET.Element, part: str) -> tuple[MergeRange, ...] | Refus
             max_row=max_row,
             max_col=max_col,
         )
-        for existing in ranges:
-            if _merges_overlap(existing, candidate):
-                return _invalid_part(
-                    part,
-                    "overlapping merge ranges",
-                    ref=ref,
-                    other=existing.ref,
-                )
         ranges.append(candidate)
+
+    clash = _find_overlapping_pair(
+        [(item.min_row, item.min_col, item.max_row, item.max_col) for item in ranges]
+    )
+    if clash is not None:
+        first, second = sorted(clash)
+        return _invalid_part(
+            part,
+            "overlapping merge ranges",
+            ref=ranges[second].ref,
+            other=ranges[first].ref,
+        )
     return tuple(ranges)
 
 
-def _merges_overlap(left: MergeRange, right: MergeRange) -> bool:
-    return not (
-        left.max_row < right.min_row
-        or right.max_row < left.min_row
-        or left.max_col < right.min_col
-        or right.max_col < left.min_col
-    )
+def _find_overlapping_pair(
+    bounds: Sequence[tuple[int, int, int, int]],
+) -> tuple[int, int] | None:
+    """Return the indexes of two overlapping rectangles, or ``None``.
 
-
-def _merge_ref_for(cell: Cell, merges: Sequence[MergeRange]) -> str | None:
-    for merge in merges:
-        if merge.contains(cell.row, cell.column):
-            return merge.ref
+    Rectangles are swept in ascending first-row order. Each rectangle still
+    active started no later than the candidate and ends no earlier, so every
+    active rectangle spans the candidate's first row. While no overlap has
+    been found, rectangles sharing a row cannot share a column, so the active
+    column spans are disjoint and sorted: only the candidate's two column
+    neighbours can overlap it. That keeps the check logarithmic per rectangle
+    instead of comparing every pair.
+    """
+    order = sorted(range(len(bounds)), key=lambda index: bounds[index][0])
+    active: list[tuple[int, int, int]] = []  # (min_col, max_col, index), by min_col
+    expiring: list[tuple[int, int]] = []  # (max_row, index) min-heap
+    for index in order:
+        min_row, min_col, max_row, max_col = bounds[index]
+        while expiring and expiring[0][0] < min_row:
+            _, expired = heapq.heappop(expiring)
+            gone = bisect.bisect_left(active, (bounds[expired][1], bounds[expired][3], expired))
+            del active[gone]
+        # Column spans start at 1, so this lands before any entry sharing
+        # min_col and the successor check below still sees it.
+        position = bisect.bisect_left(active, (min_col, 0, 0))
+        if position < len(active) and active[position][0] <= max_col:
+            return index, active[position][2]
+        if position > 0 and active[position - 1][1] >= min_col:
+            return index, active[position - 1][2]
+        active.insert(position, (min_col, max_col, index))
+        heapq.heappush(expiring, (max_row, index))
     return None
+
+
+def _assign_merge_refs(cells: Mapping[str, Cell], merges: Sequence[MergeRange]) -> dict[str, Cell]:
+    """Attach each cell's merge ref, sweeping rows rather than rescanning.
+
+    Merges are validated as non-overlapping first, so the merges spanning one
+    row have disjoint, sorted column spans and the containing merge is found
+    by bisection.
+    """
+    order = sorted(range(len(merges)), key=lambda index: merges[index].min_row)
+    active: list[tuple[int, int, str]] = []  # (min_col, max_col, ref), by min_col
+    expiring: list[tuple[int, int, int, str]] = []  # (max_row, *active entry) min-heap
+    entered = 0
+    assigned: dict[str, Cell] = {}
+    for address, cell in sorted(cells.items(), key=lambda item: (item[1].row, item[1].column)):
+        # Drop finished merges before admitting new ones, so everything in
+        # ``active`` spans this row and their column spans stay disjoint.
+        while expiring and expiring[0][0] < cell.row:
+            _, min_col, max_col, ref = heapq.heappop(expiring)
+            del active[bisect.bisect_left(active, (min_col, max_col, ref))]
+        while entered < len(order) and merges[order[entered]].min_row <= cell.row:
+            merge = merges[order[entered]]
+            entered += 1
+            if merge.max_row < cell.row:
+                continue  # ended before this row, and rows only increase
+            bisect.insort(active, (merge.min_col, merge.max_col, merge.ref))
+            heapq.heappush(expiring, (merge.max_row, merge.min_col, merge.max_col, merge.ref))
+        position = bisect.bisect_right(active, (cell.column, _MAX_COL + 1, ""))
+        merge_ref: str | None = None
+        if position > 0 and active[position - 1][1] >= cell.column:
+            merge_ref = active[position - 1][2]
+        assigned[address] = replace(cell, merge_ref=merge_ref)
+    return assigned
 
 
 def _parse_rows(
@@ -384,6 +461,15 @@ def _parse_cell(
         return payload
     v_elem, is_elem, f_elem = payload
 
+    # The formula is read first: whether one exists decides how an empty
+    # cache reads, and a malformed formula refuses either way.
+    formula: Formula | None = None
+    if f_elem is not None:
+        parsed_formula = _parse_formula(f_elem, part, address, shared_formulas, followers)
+        if isinstance(parsed_formula, Refusal):
+            return parsed_formula
+        formula = parsed_formula
+
     decoded = _decode_stored_value(
         stored_type,
         v_elem,
@@ -392,17 +478,11 @@ def _parse_cell(
         part,
         address,
         inherited_space(cell_elem, row_space),
+        has_formula=formula is not None,
     )
     if isinstance(decoded, Refusal):
         return decoded
     value_kind, raw, stored_value = decoded
-
-    formula: Formula | None = None
-    if f_elem is not None:
-        parsed_formula = _parse_formula(f_elem, part, address, shared_formulas, followers)
-        if isinstance(parsed_formula, Refusal):
-            return parsed_formula
-        formula = parsed_formula
 
     return Cell(
         address=address,
@@ -431,6 +511,10 @@ def _payload_children(
     f_elem = _single_child(cell_elem, _F_TAG, part, address)
     if isinstance(f_elem, Refusal):
         return f_elem
+    for elem, tag in ((v_elem, _V_TAG), (f_elem, _F_TAG)):
+        nested = _reject_nested_markup(elem, tag, part, address)
+        if nested is not None:
+            return nested
     return v_elem, is_elem, f_elem
 
 
@@ -446,6 +530,21 @@ def _single_child(
     return None
 
 
+def _reject_nested_markup(
+    elem: ET.Element | None, tag: str, part: str, address: str
+) -> Refusal | None:
+    """Refuse a child element inside simple content such as ``<v>`` or ``<f>``.
+
+    Reading ``.text`` alone would silently drop everything after the child,
+    turning malformed source into a plausible partial value.
+    """
+    if elem is None or not len(elem):
+        return None
+    return _invalid_part(
+        part, NESTED_MARKUP_REASON, address=address, element=tag.rsplit("}", 1)[-1]
+    )
+
+
 def _decode_stored_value(
     stored_type: str,
     v_elem: ET.Element | None,
@@ -454,6 +553,8 @@ def _decode_stored_value(
     part: str,
     address: str,
     cell_space: str,
+    *,
+    has_formula: bool,
 ) -> tuple[str, str | None, float | bool | str | None] | Refusal:
     if stored_type == "inlineStr":
         if v_elem is not None:
@@ -463,12 +564,8 @@ def _decode_stored_value(
         if is_elem is None:
             return "blank", None, None
         text = decode_rich_text(is_elem, cell_space)
-        if text is None:
-            return _invalid_part(
-                part,
-                "unpaired UTF-16 surrogate in Excel escape",
-                address=address,
-            )
+        if isinstance(text, TextError):
+            return _invalid_part(part, text.reason, address=address)
         return "string", None, text
 
     if is_elem is not None:
@@ -481,6 +578,12 @@ def _decode_stored_value(
     raw = None if v_elem is None else (v_elem.text or "")
     if raw is None:
         return "blank", None, None
+    if raw == "" and has_formula and stored_type != "str":
+        # "There is a formula but no saved answer" is not a corrupt cell.
+        # The empty raw keeps an explicitly empty cache distinct from an
+        # absent <v> and from a saved zero. An empty string is a real
+        # result for t="str", so that type keeps it.
+        return "blank", "", None
 
     if stored_type == "n":
         return _decode_number(raw, part, address)
@@ -493,11 +596,7 @@ def _decode_stored_value(
     if stored_type == "str":
         decoded = decode_excel_escapes(raw)
         if decoded is None:
-            return _invalid_part(
-                part,
-                "unpaired UTF-16 surrogate in Excel escape",
-                address=address,
-            )
+            return _invalid_part(part, SURROGATE_REASON, address=address)
         return "string", raw, decoded
     return _decode_iso_date(raw, part, address)
 
@@ -607,6 +706,14 @@ def _parse_formula(
         return _invalid_part(part, "unknown formula kind", address=address, t=raw_kind)
     kind = _FORMULA_KINDS[raw_kind]
     text = f_elem.text
+    has_text = text is not None and text.strip() != ""
+    if kind in _FORMULA_KINDS_REQUIRING_TEXT and not has_text:
+        return _invalid_part(part, f"{kind} formula has no expression", address=address)
+    if not has_text:
+        # A shared follower and a data table carry no expression of their
+        # own. Whitespace is not one either, so text stays absent rather
+        # than looking like an expression to a consumer testing presence.
+        text = None
     ref = f_elem.attrib.get("ref")
 
     ca_raw = f_elem.attrib.get("ca")
@@ -626,7 +733,7 @@ def _parse_formula(
         shared_index = _parse_unsigned_int(raw_si)
         if shared_index is None:
             return _invalid_part(part, "invalid shared formula index", address=address, si=raw_si)
-        if text:
+        if has_text:
             if ref is None:
                 return _invalid_part(part, "shared formula master missing ref", address=address)
             bounds = _parse_range_ref(ref)
@@ -647,14 +754,25 @@ def _parse_formula(
                     address=address,
                     si=shared_index,
                 )
-            shared_formulas[shared_index] = SharedFormula(master=address, ref=ref, text=text)
+            shared_formulas[shared_index] = SharedFormula(
+                master=address, ref=ref, text=text if text is not None else ""
+            )
         else:
             followers.append((address, shared_index))
     elif kind in {"array", "data_table"}:
         if ref is None:
             return _invalid_part(part, f"{kind} formula missing ref", address=address)
-        if _parse_range_ref(ref) is None:
+        bounds = _parse_range_ref(ref)
+        if bounds is None:
             return _invalid_part(part, f"invalid {kind} formula ref", address=address, ref=ref)
+        cell_pos = _parse_address(address)
+        if cell_pos is None or not _range_contains(bounds, cell_pos[0], cell_pos[1]):
+            return _invalid_part(
+                part,
+                f"{kind} formula is outside its ref",
+                address=address,
+                ref=ref,
+            )
 
     return Formula(
         text=text,

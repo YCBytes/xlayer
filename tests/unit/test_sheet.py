@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import random
+import time
 import zipfile
 from collections.abc import Mapping
 from pathlib import Path
@@ -12,7 +14,13 @@ import pytest
 from xlayer._errors import Refusal
 from xlayer._ooxml.archive import WorkbookArchive
 from xlayer._ooxml.package import PackageInfo, parse_package
-from xlayer._ooxml.sheet import Cell, SharedFormula, Worksheet, parse_worksheet
+from xlayer._ooxml.sheet import (
+    MAX_MERGE_RANGES,
+    Cell,
+    SharedFormula,
+    Worksheet,
+    parse_worksheet,
+)
 from xlayer._ooxml.strings import parse_shared_strings
 from xlayer._ooxml.styles import StyleInfo, parse_styles
 from xlayer._ooxml.workbook import SheetEntry, parse_workbook_registry
@@ -62,6 +70,23 @@ _DEFAULT_RELS = f"""<?xml version="1.0"?>
   <Relationship Id="rId1" Type="{_REL}worksheet" Target="worksheets/sheet1.xml"/>
 </Relationships>
 """.encode()
+
+
+def _letter(column: int) -> str:
+    return chr(ord("A") + column - 1)
+
+
+def _random_rect(rng: random.Random) -> tuple[int, int, int, int]:
+    """A (min_row, max_row, min_col, max_col) rectangle covering 2+ cells.
+
+    A single-cell merge is not a merge, and the reader refuses it, so the
+    geometry comparisons never generate one.
+    """
+    while True:
+        min_row, max_row = sorted((rng.randint(1, 12), rng.randint(1, 12)))
+        min_col, max_col = sorted((rng.randint(1, 6), rng.randint(1, 6)))
+        if min_row != max_row or min_col != max_col:
+            return min_row, max_row, min_col, max_col
 
 
 def worksheet_xml(body: str, *, root_attrs: str = "") -> bytes:
@@ -603,6 +628,57 @@ class TestStyleResolution:
         assert cell.style.temporal_kind == "date"
 
 
+class TestScalarPayloads:
+    """``<v>``, ``<f>``, and ``<t>`` hold simple text; a child element is malformed.
+
+    Reading ``.text`` alone silently drops everything after the first child,
+    which would turn malformed content into a plausible partial value.
+    """
+
+    def test_nested_markup_in_numeric_value_is_refused(self, tmp_path: Path) -> None:
+        xml = worksheet_xml(
+            '<sheetData><row r="1"><c r="A1"><v>1<extra/>2</v></c></row></sheetData>'
+        )
+        refusal = expect_refusal(parse_sheet(tmp_path, xml), "invalid_part_content")
+        assert refusal.details["address"] == "A1"
+
+    def test_nested_markup_in_string_value_is_refused(self, tmp_path: Path) -> None:
+        xml = worksheet_xml(
+            '<sheetData><row r="1"><c r="A1" t="str"><v>abc<b/>def</v></c></row></sheetData>'
+        )
+        expect_refusal(parse_sheet(tmp_path, xml), "invalid_part_content")
+
+    def test_nested_markup_in_formula_is_refused(self, tmp_path: Path) -> None:
+        xml = worksheet_xml(
+            '<sheetData><row r="1"><c r="A1"><f>1+<x/>2</f><v>3</v></c></row></sheetData>'
+        )
+        expect_refusal(parse_sheet(tmp_path, xml), "invalid_part_content")
+
+    def test_nested_markup_in_inline_text_is_refused(self, tmp_path: Path) -> None:
+        xml = worksheet_xml(
+            '<sheetData><row r="1"><c r="A1" t="inlineStr"><is>'
+            "<t>a<b/>c</t></is></c></row></sheetData>"
+        )
+        refusal = expect_refusal(parse_sheet(tmp_path, xml), "invalid_part_content")
+        assert refusal.details["address"] == "A1"
+
+    def test_nested_markup_in_inline_run_text_is_refused(self, tmp_path: Path) -> None:
+        xml = worksheet_xml(
+            '<sheetData><row r="1"><c r="A1" t="inlineStr"><is>'
+            "<r><t>a<b/>c</t></r></is></c></row></sheetData>"
+        )
+        expect_refusal(parse_sheet(tmp_path, xml), "invalid_part_content")
+
+    def test_phonetic_guide_children_are_still_allowed(self, tmp_path: Path) -> None:
+        xml = worksheet_xml(
+            '<sheetData><row r="1"><c r="A1" t="inlineStr"><is>'
+            '<t>base</t><rPh sb="0" eb="1"><t>phon</t></rPh>'
+            "</is></c></row></sheetData>"
+        )
+        cell = expect_sheet(parse_sheet(tmp_path, xml)).cells["A1"]
+        assert cell.stored_value == "base"
+
+
 class TestFormulas:
     def test_normal_formula_keeps_cached_result_separate(self, tmp_path: Path) -> None:
         xml = worksheet_xml(
@@ -617,6 +693,97 @@ class TestFormulas:
         assert cell.stored_value == 4500.0
         assert cell.raw == "4500"
 
+    def test_explicit_normal_kind_is_accepted(self, tmp_path: Path) -> None:
+        # ECMA-376 ST_CellFormulaType spells the default out as "normal";
+        # omitting t and writing t="normal" mean the same thing.
+        xml = worksheet_xml(
+            '<sheetData><row r="1"><c r="A1"><f t="normal">1+1</f><v>2</v></c></row></sheetData>'
+        )
+        cell = expect_sheet(parse_sheet(tmp_path, xml)).cells["A1"]
+        assert cell.formula is not None
+        assert cell.formula.kind == "normal"
+        assert cell.formula.text == "1+1"
+
+    def test_empty_normal_formula_is_refused(self, tmp_path: Path) -> None:
+        xml = worksheet_xml('<sheetData><row r="1"><c r="A1"><f/><v>1</v></c></row></sheetData>')
+        expect_refusal(parse_sheet(tmp_path, xml), "invalid_part_content")
+
+    def test_whitespace_only_normal_formula_is_refused(self, tmp_path: Path) -> None:
+        xml = worksheet_xml(
+            '<sheetData><row r="1"><c r="A1"><f> </f><v>1</v></c></row></sheetData>'
+        )
+        expect_refusal(parse_sheet(tmp_path, xml), "invalid_part_content")
+
+    def test_empty_array_formula_is_refused(self, tmp_path: Path) -> None:
+        xml = worksheet_xml(
+            '<sheetData><row r="1"><c r="A1"><f t="array" ref="A1"/><v>1</v></c></row></sheetData>'
+        )
+        expect_refusal(parse_sheet(tmp_path, xml), "invalid_part_content")
+
+    def test_array_ref_must_contain_the_formula_cell(self, tmp_path: Path) -> None:
+        xml = worksheet_xml(
+            '<sheetData><row r="1"><c r="A1">'
+            '<f t="array" ref="B1:B2">SUM(1)</f><v>1</v></c></row></sheetData>'
+        )
+        refusal = expect_refusal(parse_sheet(tmp_path, xml), "invalid_part_content")
+        assert refusal.details["address"] == "A1"
+        assert refusal.details["ref"] == "B1:B2"
+
+    def test_data_table_ref_must_contain_the_formula_cell(self, tmp_path: Path) -> None:
+        xml = worksheet_xml(
+            '<sheetData><row r="1"><c r="A1">'
+            '<f t="dataTable" ref="C3:D4"/><v>1</v></c></row></sheetData>'
+        )
+        expect_refusal(parse_sheet(tmp_path, xml), "invalid_part_content")
+
+    def test_overlapping_master_refs_are_accepted(self, tmp_path: Path) -> None:
+        """A master's ``ref`` bounds a group; it does not own those cells.
+
+        Excel writes one master's ``ref`` across cells that a second master
+        then claims. Membership comes from each cell's own ``si``, and a cell
+        carries at most one ``<f>``, so nothing is ambiguous. This shape is
+        invented; the workbook evidence behind the decision is recorded in
+        the internal worksheet-reader notes.
+        """
+        xml = worksheet_xml(
+            "<sheetData>"
+            '<row r="2"><c r="B2"><f t="shared" ref="B2:B6" si="7">A2*2</f>'
+            "<v>2</v></c></row>"
+            '<row r="3"><c r="B3"><f t="shared" si="7"/><v>4</v></c></row>'
+            '<row r="4"><c r="B4"><f t="shared" ref="B4" si="9">A4*3</f>'
+            "<v>9</v></c></row>"
+            "</sheetData>"
+        )
+        sheet = expect_sheet(parse_sheet(tmp_path, xml))
+        assert sheet.shared_formulas[7].ref == "B2:B6"
+        assert sheet.shared_formulas[9].ref == "B4"
+        assert sheet.cells["B3"].formula is not None
+        assert sheet.cells["B3"].formula.shared_index == 7
+        assert sheet.cells["B4"].formula is not None
+        assert sheet.cells["B4"].formula.shared_index == 9
+
+    def test_disjoint_shared_masters_are_accepted(self, tmp_path: Path) -> None:
+        xml = worksheet_xml(
+            "<sheetData>"
+            '<row r="1"><c r="A1"><f t="shared" ref="A1:A2" si="0">1</f><v>1</v></c>'
+            '<c r="B1"><f t="shared" ref="B1:B2" si="1">2</f><v>2</v></c></row>'
+            "</sheetData>"
+        )
+        sheet = expect_sheet(parse_sheet(tmp_path, xml))
+        assert sorted(sheet.shared_formulas) == [0, 1]
+
+    def test_master_range_starting_above_a_later_master_is_accepted(self, tmp_path: Path) -> None:
+        # The second master's ref begins on row 1, above the first master's
+        # own row, so overlap checking cannot assume document order.
+        xml = worksheet_xml(
+            "<sheetData>"
+            '<row r="2"><c r="A2"><f t="shared" ref="A2:A3" si="0">1</f><v>1</v></c></row>'
+            '<row r="11"><c r="B11"><f t="shared" ref="B1:B11" si="1">2</f><v>2</v></c></row>'
+            "</sheetData>"
+        )
+        sheet = expect_sheet(parse_sheet(tmp_path, xml))
+        assert sheet.shared_formulas[1].ref == "B1:B11"
+
     def test_formula_without_cache_is_not_malformed(self, tmp_path: Path) -> None:
         xml = worksheet_xml(
             '<sheetData><row r="1"><c r="A1" t="b"><f>B1&gt;0</f></c></row></sheetData>'
@@ -628,9 +795,77 @@ class TestFormulas:
         assert cell.stored_value is None
         assert cell.raw is None
 
-    def test_empty_numeric_formula_cache_is_still_refused(self, tmp_path: Path) -> None:
+    def test_empty_formula_cache_is_an_empty_saved_result(self, tmp_path: Path) -> None:
+        # A formula with an explicitly empty cache is not a corrupt cell.
+        # Generators write this for a formula that has never calculated.
         xml = worksheet_xml('<sheetData><row r="1"><c r="A1"><f>A2</f><v/></c></row></sheetData>')
+        cell = expect_sheet(parse_sheet(tmp_path, xml)).cells["A1"]
+        assert cell.formula is not None
+        assert cell.formula.text == "A2"
+        assert cell.value_kind == "blank"
+        assert cell.raw == ""
+        assert cell.stored_value is None
+
+    def test_formula_cache_states_stay_distinct(self, tmp_path: Path) -> None:
+        xml = worksheet_xml(
+            "<sheetData><row r='1'>"
+            '<c r="A1"><f>X1</f></c>'
+            '<c r="B1"><f>X2</f><v/></c>'
+            '<c r="C1"><f>X3</f><v>0</v></c>'
+            "</row></sheetData>"
+        )
+        cells = expect_sheet(parse_sheet(tmp_path, xml)).cells
+        assert (cells["A1"].raw, cells["A1"].stored_value) == (None, None)
+        assert (cells["B1"].raw, cells["B1"].stored_value) == ("", None)
+        assert (cells["C1"].raw, cells["C1"].stored_value) == ("0", 0.0)
+        assert cells["C1"].value_kind == "number"
+
+    def test_empty_cache_applies_to_every_scalar_result_type(self, tmp_path: Path) -> None:
+        xml = worksheet_xml(
+            "<sheetData><row r='1'>"
+            '<c r="A1" t="b"><f>X1</f><v/></c>'
+            '<c r="B1" t="e"><f>X2</f><v/></c>'
+            '<c r="C1" t="d"><f>X3</f><v/></c>'
+            "</row></sheetData>"
+        )
+        cells = expect_sheet(parse_sheet(tmp_path, xml)).cells
+        for address in ("A1", "B1", "C1"):
+            assert cells[address].value_kind == "blank", address
+            assert cells[address].raw == "", address
+            assert cells[address].stored_value is None, address
+            assert cells[address].formula is not None, address
+
+    def test_empty_string_formula_result_stays_an_empty_string(self, tmp_path: Path) -> None:
+        xml = worksheet_xml(
+            '<sheetData><row r="1"><c r="A1" t="str"><f>X1</f><v/></c></row></sheetData>'
+        )
+        cell = expect_sheet(parse_sheet(tmp_path, xml)).cells["A1"]
+        assert cell.value_kind == "string"
+        assert cell.stored_value == ""
+
+    def test_empty_cache_without_a_formula_is_still_refused(self, tmp_path: Path) -> None:
+        xml = worksheet_xml('<sheetData><row r="1"><c r="A1"><v/></c></row></sheetData>')
         expect_refusal(parse_sheet(tmp_path, xml), "invalid_part_content")
+
+    def test_malformed_cache_with_a_formula_is_still_refused(self, tmp_path: Path) -> None:
+        xml = worksheet_xml(
+            '<sheetData><row r="1"><c r="A1"><f>X1</f><v> </v></c></row></sheetData>'
+        )
+        expect_refusal(parse_sheet(tmp_path, xml), "invalid_part_content")
+
+    def test_whitespace_only_shared_follower_has_no_text(self, tmp_path: Path) -> None:
+        # Followers are documented as text=None; a space is not an expression.
+        xml = worksheet_xml(
+            "<sheetData>"
+            '<row r="1"><c r="A1"><f t="shared" ref="A1:A2" si="0">B1</f><v>1</v></c></row>'
+            '<row r="2"><c r="A2"><f t="shared" si="0"> </f><v>2</v></c></row>'
+            "</sheetData>"
+        )
+        follower = expect_sheet(parse_sheet(tmp_path, xml)).cells["A2"].formula
+        assert follower is not None
+        assert follower.kind == "shared"
+        assert follower.shared_index == 0
+        assert follower.text is None
 
     def test_shared_master_and_follower(self, tmp_path: Path) -> None:
         xml = worksheet_xml(
@@ -825,6 +1060,106 @@ class TestMerges:
     def test_malformed_merge_ref_is_refused(self, tmp_path: Path) -> None:
         xml = worksheet_xml("<sheetData/><mergeCells><mergeCell ref='A1'/></mergeCells>")
         expect_refusal(parse_sheet(tmp_path, xml), "invalid_part_content")
+
+    def test_many_disjoint_merges_stay_within_a_bounded_cost(self, tmp_path: Path) -> None:
+        # Comparing every merge with every earlier one made this quadratic:
+        # 20,000 merges is ~200 million comparisons, plus one scan per cell.
+        count = 20_000
+        merges = "".join(f'<mergeCell ref="A{row}:B{row}"/>' for row in range(1, count + 1))
+        rows = "".join(
+            f'<row r="{row}"><c r="A{row}"><v>{row}</v></c></row>' for row in range(1, count + 1)
+        )
+        xml = worksheet_xml(
+            f'<sheetData>{rows}</sheetData><mergeCells count="{count}">{merges}</mergeCells>'
+        )
+        started = time.perf_counter()
+        sheet = expect_sheet(parse_sheet(tmp_path, xml))
+        elapsed = time.perf_counter() - started
+        assert len(sheet.merges) == count
+        assert sheet.cells["A7"].merge_ref == "A7:B7"
+        assert sheet.cells[f"A{count}"].merge_ref == f"A{count}:B{count}"
+        assert elapsed < 5.0, f"merge handling took {elapsed:.1f}s for {count} merges"
+
+    def test_merge_count_over_the_cap_is_refused(self, tmp_path: Path) -> None:
+        count = MAX_MERGE_RANGES + 1
+        merges = "".join(f'<mergeCell ref="A{row}:B{row}"/>' for row in range(1, count + 1))
+        xml = worksheet_xml(f"<sheetData/><mergeCells>{merges}</mergeCells>")
+        refusal = expect_refusal(parse_sheet(tmp_path, xml), "invalid_part_content")
+        assert refusal.details["reason"] == "too many merge ranges"
+        assert refusal.details["limit"] == MAX_MERGE_RANGES
+
+    def test_overlap_detection_matches_a_pairwise_check(self, tmp_path: Path) -> None:
+        # The sweep replaced an every-pair comparison, so compare the two on
+        # random rectangles: same accept/refuse answer, every time.
+        rng = random.Random(20260912)  # noqa: S311
+        for _ in range(40):
+            rects = [_random_rect(rng) for _ in range(rng.randint(2, 7))]
+            refs = [
+                f"{_letter(min_col)}{min_row}:{_letter(max_col)}{max_row}"
+                for min_row, max_row, min_col, max_col in rects
+            ]
+            overlaps = any(
+                not (
+                    left[1] < right[0]
+                    or right[1] < left[0]
+                    or left[3] < right[2]
+                    or right[3] < left[2]
+                )
+                for index, left in enumerate(rects)
+                for right in rects[:index]
+            )
+            body = "".join(f'<mergeCell ref="{ref}"/>' for ref in refs)
+            result = parse_sheet(
+                tmp_path, worksheet_xml(f"<sheetData/><mergeCells>{body}</mergeCells>")
+            )
+            if overlaps:
+                expect_refusal(result, "invalid_part_content")
+            else:
+                assert len(expect_sheet(result).merges) == len(refs)
+
+    def test_merge_lookup_matches_a_scan_of_every_merge(self, tmp_path: Path) -> None:
+        rng = random.Random(902)  # noqa: S311
+        for _ in range(40):
+            placed: list[tuple[int, int, int, int]] = []
+            for _ in range(rng.randint(1, 6)):
+                candidate = _random_rect(rng)
+                if all(
+                    candidate[1] < other[0]
+                    or other[1] < candidate[0]
+                    or candidate[3] < other[2]
+                    or other[3] < candidate[2]
+                    for other in placed
+                ):
+                    placed.append(candidate)
+            rng.shuffle(placed)
+            refs = [
+                f"{_letter(min_col)}{min_row}:{_letter(max_col)}{max_row}"
+                for min_row, max_row, min_col, max_col in placed
+            ]
+            addresses = sorted({(rng.randint(1, 12), rng.randint(1, 6)) for _ in range(10)})
+            rows = ""
+            for row in sorted({row for row, _ in addresses}):
+                cells = "".join(
+                    f'<c r="{_letter(col)}{row}"><v>1</v></c>'
+                    for candidate_row, col in addresses
+                    if candidate_row == row
+                )
+                rows += f'<row r="{row}">{cells}</row>'
+            merges = "".join(f'<mergeCell ref="{ref}"/>' for ref in refs)
+            sheet = expect_sheet(
+                parse_sheet(
+                    tmp_path,
+                    worksheet_xml(
+                        f"<sheetData>{rows}</sheetData><mergeCells>{merges}</mergeCells>"
+                    ),
+                )
+            )
+            for cell in sheet.cells.values():
+                scanned = next(
+                    (merge.ref for merge in sheet.merges if merge.contains(cell.row, cell.column)),
+                    None,
+                )
+                assert cell.merge_ref == scanned, f"{cell.address} in {refs}"
 
     def test_merge_cells_is_consumed_not_other_elements(self, tmp_path: Path) -> None:
         xml = worksheet_xml("<sheetData/><mergeCells><mergeCell ref='A1:B1'/></mergeCells>")

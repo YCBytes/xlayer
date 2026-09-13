@@ -265,6 +265,22 @@ class TestExcelEscapeUnicode:
         xml = sst("<si><t>_xD83D_x_xDE00_</t></si>")
         expect_refusal(parse_strings(tmp_path, standard_parts(xml)), "invalid_part_content")
 
+    def test_nested_markup_in_text_is_refused(self, tmp_path: Path) -> None:
+        # <t> is simple content; reading .text alone would silently drop "c".
+        xml = sst("<si><t>a<b/>c</t></si>")
+        refusal = expect_refusal(
+            parse_strings(tmp_path, standard_parts(xml)), "invalid_part_content"
+        )
+        assert refusal.details["reason"] == "unexpected child element in text content"
+        assert refusal.details["string_index"] == 0
+
+    def test_nested_markup_in_run_text_is_refused(self, tmp_path: Path) -> None:
+        xml = sst("<si><t>ok</t></si>", "<si><r><t>a<b/>c</t></r></si>")
+        refusal = expect_refusal(
+            parse_strings(tmp_path, standard_parts(xml)), "invalid_part_content"
+        )
+        assert refusal.details["string_index"] == 1
+
     def test_protected_surrogate_literals_stay_text(self, tmp_path: Path) -> None:
         xml = sst("<si><t>_x005F_xD83D__x005F_xDE00_</t></si>")
         assert expect_strings(parse_strings(tmp_path, standard_parts(xml))) == ("_xD83D__xDE00_",)

@@ -22,7 +22,7 @@ are deliberate:
 from __future__ import annotations
 
 from xlayer._errors import Refusal
-from xlayer._ooxml._text import XML_SPACE, decode_rich_text
+from xlayer._ooxml._text import XML_SPACE, TextError, decode_rich_text
 from xlayer._ooxml.archive import WorkbookArchive
 from xlayer._ooxml.package import TARGET_MODE_INTERNAL, PackageInfo
 
@@ -62,12 +62,8 @@ def parse_shared_strings(
     strings: list[str] = []
     for index, si_elem in enumerate(root.findall(_SI_TAG)):
         text = decode_rich_text(si_elem, root_space)
-        if text is None:
-            return _invalid_part(
-                part,
-                "unpaired UTF-16 surrogate in Excel escape",
-                string_index=index,
-            )
+        if isinstance(text, TextError):
+            return _invalid_part(part, text.reason, string_index=index)
         strings.append(text)
     return tuple(strings)
 

@@ -7,6 +7,7 @@ genuinely large files.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import sys
 import warnings
@@ -92,6 +93,69 @@ class TestLoadHappyPath:
         archive.close()
         archive.close()
         assert archive.closed
+
+
+class TestSnapshotFingerprint:
+    """Eager SHA-256 of the exact bytes ``load`` validated; digest only is kept."""
+
+    def test_fingerprint_is_sha256_prefixed_lowercase_hex(self, tmp_path: Path) -> None:
+        archive = expect_archive(load(build_zip(tmp_path / "ok.xlsx", {"a.xml": _XML})))
+        fingerprint = archive.source_fingerprint
+        assert fingerprint.startswith("sha256:")
+        digest = fingerprint.removeprefix("sha256:")
+        assert len(digest) == 64
+        assert digest == digest.lower()
+        assert all(character in "0123456789abcdef" for character in digest)
+        archive.close()
+
+    def test_fingerprint_matches_loaded_bytes(self, tmp_path: Path) -> None:
+        path = build_zip(tmp_path / "ok.xlsx", {"a.xml": _XML})
+        raw = path.read_bytes()
+        archive = expect_archive(load(path))
+        assert archive.source_fingerprint == "sha256:" + hashlib.sha256(raw).hexdigest()
+        archive.close()
+
+    def test_replaced_source_file_does_not_change_session(self, tmp_path: Path) -> None:
+        path = build_zip(tmp_path / "ok.xlsx", {"a.xml": _XML})
+        archive = expect_archive(load(path))
+        original = archive.source_fingerprint
+        path.write_bytes(b"replaced-contents")
+        assert archive.source_fingerprint == original
+        assert archive.read_part("a.xml") == _XML
+        archive.close()
+
+    def test_deleted_source_file_does_not_change_session(self, tmp_path: Path) -> None:
+        path = build_zip(tmp_path / "ok.xlsx", {"a.xml": _XML})
+        archive = expect_archive(load(path))
+        original = archive.source_fingerprint
+        path.unlink()
+        assert archive.source_fingerprint == original
+        assert archive.read_part("a.xml") == _XML
+        archive.close()
+
+    def test_new_open_sees_replaced_file(self, tmp_path: Path) -> None:
+        path = build_zip(tmp_path / "ok.xlsx", {"a.xml": _XML})
+        first = expect_archive(load(path))
+        build_zip(path, {"b.xml": _XML})
+        second = expect_archive(load(path))
+        assert first.source_fingerprint != second.source_fingerprint
+        assert second.has_part("b.xml")
+        first.close()
+        second.close()
+
+    def test_fingerprint_survives_close(self, tmp_path: Path) -> None:
+        archive = expect_archive(load(build_zip(tmp_path / "ok.xlsx", {"a.xml": _XML})))
+        fingerprint = archive.source_fingerprint
+        archive.close()
+        assert archive.source_fingerprint == fingerprint
+
+    def test_raw_bytes_are_not_retained(self, tmp_path: Path) -> None:
+        path = build_zip(tmp_path / "ok.xlsx", {"a.xml": _XML})
+        raw = path.read_bytes()
+        archive = expect_archive(load(path))
+        held = [value for value in vars(archive).values() if isinstance(value, bytes)]
+        assert raw not in held
+        archive.close()
 
 
 class TestContainerRefusals:
@@ -205,6 +269,56 @@ class TestConcatenationRefusals:
         path.write_bytes(bytes(raw))
         refusal = expect_refusal(load(path), "malformed_archive")
         assert refusal.details["first_local_offset"] == 1
+
+
+def patch_eocd(path: Path, field_offset: int, value: int) -> Path:
+    """Overwrite a two-byte end-of-central-directory field in place."""
+    raw = bytearray(path.read_bytes())
+    eocd = raw.rfind(b"PK\x05\x06")
+    assert eocd != -1
+    raw[eocd + field_offset : eocd + field_offset + 2] = value.to_bytes(2, "little")
+    path.write_bytes(bytes(raw))
+    return path
+
+
+class TestDiskMetadataRefusals:
+    """D2: disk fields were never read, so spanned metadata went unchecked.
+
+    ``zipfile`` independently rejects genuinely multi-disk archives, so these
+    were validation-completeness gaps rather than live vulnerabilities; the
+    preflight is the layer that has to be complete.
+    """
+
+    def test_nonzero_current_disk_rejected(self, tmp_path: Path) -> None:
+        path = patch_eocd(build_zip(tmp_path / "disk.xlsx", {"a.xml": _XML}), 4, 1)
+        refusal = expect_refusal(load(path), "malformed_archive")
+        assert refusal.details["reason"] == "archive spans multiple disks"
+        assert refusal.details["this_disk"] == 1
+
+    def test_nonzero_central_directory_disk_rejected(self, tmp_path: Path) -> None:
+        path = patch_eocd(build_zip(tmp_path / "cddisk.xlsx", {"a.xml": _XML}), 6, 2)
+        refusal = expect_refusal(load(path), "malformed_archive")
+        assert refusal.details["reason"] == "archive spans multiple disks"
+        assert refusal.details["central_directory_disk"] == 2
+
+    def test_disk_entry_count_disagreeing_with_total_rejected(self, tmp_path: Path) -> None:
+        path = build_zip(tmp_path / "counts.xlsx", {"a.xml": _XML, "b.xml": _XML})
+        patch_eocd(path, 8, 1)  # this disk claims one of the two entries
+        refusal = expect_refusal(load(path), "malformed_archive")
+        assert refusal.details["reason"] == "disk entry count disagrees with the total"
+        assert refusal.details["disk_entries"] == 1
+        assert refusal.details["total_entries"] == 2
+
+    def test_zip64_sentinel_still_reported_as_zip64(self, tmp_path: Path) -> None:
+        # A ZIP64 archive puts 0xFFFF in the disk fields too; it must keep the
+        # honest ZIP64 refusal rather than being called multi-disk.
+        path = patch_eocd(build_zip(tmp_path / "z64.xlsx", {"a.xml": _XML}), 4, 0xFFFF)
+        patch_eocd(path, 10, 0xFFFF)
+        expect_refusal(load(path), "archive_too_many_parts")
+
+    def test_single_disk_archive_still_loads(self, tmp_path: Path) -> None:
+        path = build_zip(tmp_path / "ok.xlsx", {"a.xml": _XML, "b.xml": _XML})
+        assert expect_archive(load(path)).part_names() == ("a.xml", "b.xml")
 
 
 class TestArchiveLimitsValidation:
@@ -356,6 +470,191 @@ class TestEntryRefusals:
         expect_refusal(load(path), "duplicate_archive_entry")
 
 
+class TestFailureCleanup:
+    """Post-construction refusals and unexpected exceptions must close the ZipFile.
+
+    ZipFile.__del__ also calls close, so tests retain the constructed instance
+    to prove the close is explicit. Cleanup starts only after successful
+    construction: a ``BadZipFile`` constructor failure never assigned
+    ``zip_file`` and must not try to close it.
+    """
+
+    def _retain_constructed_zips(self, monkeypatch: pytest.MonkeyPatch) -> list[zipfile.ZipFile]:
+        retained: list[zipfile.ZipFile] = []
+        real_init = zipfile.ZipFile.__init__
+
+        def tracking_init(self: zipfile.ZipFile, *args: object, **kwargs: object) -> None:
+            real_init(self, *args, **kwargs)  # type: ignore[call-overload]
+            retained.append(self)
+
+        monkeypatch.setattr(zipfile.ZipFile, "__init__", tracking_init)
+        return retained
+
+    def _load_retaining_zips(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        path: Path,
+        limits: ArchiveLimits | None = None,
+    ) -> tuple[WorkbookArchive | Refusal, list[zipfile.ZipFile]]:
+        retained = self._retain_constructed_zips(monkeypatch)
+        return load(path, limits), retained
+
+    def _assert_explicitly_closed(self, zips: list[zipfile.ZipFile]) -> None:
+        assert zips, "ZipFile was never successfully constructed"
+        assert all(zf.fp is None for zf in zips), "constructed ZipFile was not explicitly closed"
+
+    def test_successful_load_keeps_zip_open(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        path = build_zip(tmp_path / "ok.xlsx", {"a.xml": _XML})
+        result, zips = self._load_retaining_zips(monkeypatch, path)
+        archive = expect_archive(result)
+        assert zips
+        assert all(zf.fp is not None for zf in zips)
+        archive.close()
+        assert all(zf.fp is None for zf in zips)
+
+    def test_constructor_failure_never_assigns_zip_file(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        path = build_zip(tmp_path / "ok.xlsx", {"a.xml": _XML})
+        attempted = {"n": 0}
+
+        def failing_init(_self: zipfile.ZipFile, *_args: object, **_kwargs: object) -> None:
+            attempted["n"] += 1
+            raise zipfile.BadZipFile("injected constructor failure")
+
+        monkeypatch.setattr(zipfile.ZipFile, "__init__", failing_init)
+        refusal = expect_refusal(load(path), "not_a_zip")
+        assert attempted["n"] >= 1
+        assert "injected constructor failure" in refusal.message
+
+    def test_infolist_exception_closes_and_propagates(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        path = build_zip(tmp_path / "ok.xlsx", {"a.xml": _XML})
+        retained = self._retain_constructed_zips(monkeypatch)
+
+        def boom(_self: zipfile.ZipFile) -> list[zipfile.ZipInfo]:
+            raise RuntimeError("infolist failed")
+
+        monkeypatch.setattr(zipfile.ZipFile, "infolist", boom)
+        with pytest.raises(RuntimeError, match="infolist failed") as caught:
+            load(path)
+        assert type(caught.value) is RuntimeError
+        self._assert_explicitly_closed(retained)
+
+    def test_fingerprint_exception_closes_and_propagates(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        path = build_zip(tmp_path / "ok.xlsx", {"a.xml": _XML})
+        retained = self._retain_constructed_zips(monkeypatch)
+
+        def boom(_data: object) -> object:
+            raise RuntimeError("sha256 failed")
+
+        monkeypatch.setattr(hashlib, "sha256", boom)
+        with pytest.raises(RuntimeError, match="sha256 failed") as caught:
+            load(path)
+        assert type(caught.value) is RuntimeError
+        self._assert_explicitly_closed(retained)
+
+    def test_archive_construction_exception_closes_and_propagates(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        path = build_zip(tmp_path / "ok.xlsx", {"a.xml": _XML})
+        retained = self._retain_constructed_zips(monkeypatch)
+
+        def boom(_self: WorkbookArchive, *_args: object, **_kwargs: object) -> None:
+            raise RuntimeError("archive init failed")
+
+        monkeypatch.setattr(WorkbookArchive, "__init__", boom)
+        with pytest.raises(RuntimeError, match="archive init failed") as caught:
+            load(path)
+        assert type(caught.value) is RuntimeError
+        self._assert_explicitly_closed(retained)
+
+    def test_stdlib_entry_count_mismatch_closes(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        path = build_zip(tmp_path / "count.xlsx", {"a.xml": _XML})
+        real_infolist = zipfile.ZipFile.infolist
+
+        def lying_infolist(self: zipfile.ZipFile) -> list[zipfile.ZipInfo]:
+            return [*real_infolist(self), *real_infolist(self)]
+
+        monkeypatch.setattr(zipfile.ZipFile, "infolist", lying_infolist)
+        result, zips = self._load_retaining_zips(monkeypatch, path)
+        expect_refusal(result, "malformed_archive")
+        self._assert_explicitly_closed(zips)
+
+    def test_stdlib_name_rewrite_closes(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        path = build_zip(tmp_path / "rename.xlsx", {"a.xml": _XML})
+        real_infolist = zipfile.ZipFile.infolist
+
+        def rewritten_infolist(self: zipfile.ZipFile) -> list[zipfile.ZipInfo]:
+            infos = real_infolist(self)
+            infos[0].filename = "rewritten.xml"
+            return infos
+
+        monkeypatch.setattr(zipfile.ZipFile, "infolist", rewritten_infolist)
+        result, zips = self._load_retaining_zips(monkeypatch, path)
+        expect_refusal(result, "malformed_archive")
+        self._assert_explicitly_closed(zips)
+
+    def test_encrypted_entry_closes(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        path = build_zip(tmp_path / "enc.xlsx", {"xl/secret.xml": _XML})
+        raw = bytearray(path.read_bytes())
+        central_dir = raw.find(b"PK\x01\x02")
+        assert central_dir != -1
+        raw[central_dir + 8] |= 0x1
+        path.write_bytes(bytes(raw))
+        result, zips = self._load_retaining_zips(monkeypatch, path)
+        expect_refusal(result, "encrypted_archive_entry")
+        self._assert_explicitly_closed(zips)
+
+    def test_unsupported_compression_closes(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        path = tmp_path / "bz2.xlsx"
+        with zipfile.ZipFile(path, "w") as zf:
+            zf.writestr("a.xml", _XML, compress_type=zipfile.ZIP_BZIP2)
+        result, zips = self._load_retaining_zips(monkeypatch, path)
+        expect_refusal(result, "unsupported_compression")
+        self._assert_explicitly_closed(zips)
+
+    def test_duplicate_entry_closes(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        path = tmp_path / "dup.xlsx"
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            with zipfile.ZipFile(path, "w") as zf:
+                zf.writestr("a.xml", _XML)
+                zf.writestr("a.xml", _XML)
+        result, zips = self._load_retaining_zips(monkeypatch, path)
+        expect_refusal(result, "duplicate_archive_entry")
+        self._assert_explicitly_closed(zips)
+
+    def test_oversized_part_closes(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        path = build_zip(tmp_path / "fat.xlsx", {"a.xml": b"x" * 100})
+        result, zips = self._load_retaining_zips(
+            monkeypatch, path, ArchiveLimits(max_part_bytes=99)
+        )
+        expect_refusal(result, "archive_part_too_large")
+        self._assert_explicitly_closed(zips)
+
+    def test_oversized_expansion_closes(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        path = build_zip(tmp_path / "sum.xlsx", {"a.xml": b"x" * 60, "b.xml": b"y" * 60})
+        result, zips = self._load_retaining_zips(
+            monkeypatch, path, ArchiveLimits(max_part_bytes=80, max_total_bytes=100)
+        )
+        expect_refusal(result, "archive_expansion_too_large")
+        self._assert_explicitly_closed(zips)
+
+
 class TestXmlParsing:
     def _parse(self, tmp_path: Path, data: bytes, limits: ArchiveLimits | None = None) -> object:
         archive = expect_archive(load(build_zip(tmp_path / "x.xlsx", {"a.xml": data}), limits))
@@ -484,3 +783,42 @@ class TestTargetValidation:
         assert validate_opc_target("http://evil.example/x.xml") is None
         assert validate_opc_target("//host/share/x.xml") is None
         assert validate_opc_target("C:evil.xml") is None
+
+
+class TestPrefixAfterPackageRootSlash:
+    """D1: a package-root slash must not hide a scheme, drive, or authority.
+
+    The scheme check is anchored and the authority check only fires on a
+    leading ``//``, so a single leading slash defeated both while
+    ``normalize_package_path`` then stripped that slash and left the prefix
+    intact.
+    """
+
+    def test_drive_prefix_after_slash_is_refused(self) -> None:
+        assert validate_opc_target("/C:/evil.xml") is None
+        assert normalize_package_path("/C:/evil.xml") is None
+
+    def test_scheme_after_slash_is_refused(self) -> None:
+        assert validate_opc_target("/http://evil.example/x.xml") is None
+        assert normalize_package_path("/http://evil.example/x.xml") is None
+
+    def test_file_scheme_after_slash_is_refused(self) -> None:
+        assert validate_opc_target("/file:///etc/passwd") is None
+        assert normalize_package_path("/file:///etc/passwd") is None
+
+    def test_prefix_after_repeated_slashes_is_refused(self) -> None:
+        assert validate_opc_target("//C:/x.xml") is None
+        assert validate_opc_target("///C:/x.xml") is None
+        assert normalize_package_path("///C:/x.xml") is None
+
+    def test_encoded_slash_before_prefix_is_refused(self) -> None:
+        assert validate_opc_target("%2fC:/evil.xml") is None
+        assert validate_opc_target("%2Fhttp://evil.example/x.xml") is None
+
+    def test_encoded_prefix_after_slash_is_refused(self) -> None:
+        assert validate_opc_target("/http%3A//evil.example/x.xml") is None
+        assert validate_opc_target("/C%3A/evil.xml") is None
+
+    def test_legitimate_absolute_part_name_still_resolves(self) -> None:
+        assert validate_opc_target("/xl/workbook.xml") == "/xl/workbook.xml"
+        assert normalize_package_path("/xl/workbook.xml") == "xl/workbook.xml"

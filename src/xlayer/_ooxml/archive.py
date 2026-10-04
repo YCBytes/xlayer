@@ -22,6 +22,7 @@ carrying at least one structured recovery option; the public
 
 from __future__ import annotations
 
+import hashlib
 import io
 import posixpath
 import re
@@ -49,8 +50,9 @@ _UTF8_NAME_FLAG_BIT = 0x800
 _SUPPORTED_COMPRESSION = (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED)
 
 # End-of-central-directory record: fixed 22 bytes plus up to 65535 comment
-# bytes. Fields at offset 8: disk entries (H), total entries (H), central
-# directory size (I), central directory offset (I).
+# bytes. Fields at offset 4: this disk (H), disk of the central directory (H),
+# entries on this disk (H), total entries (H), central directory size (I),
+# central directory offset (I).
 _EOCD_SIGNATURE = b"PK\x05\x06"
 _EOCD_FIXED_SIZE = 22
 _EOCD_MAX_SCAN = _EOCD_FIXED_SIZE + 65535
@@ -211,6 +213,12 @@ def _malformed_archive(reason: str, **details: object) -> Refusal:
     )
 
 
+def _close_on_refusal(zip_file: zipfile.ZipFile, refusal: Refusal) -> Refusal:
+    """Close a ZipFile that was constructed but will not be owned by an archive."""
+    zip_file.close()
+    return refusal
+
+
 def _decode_entry_name(raw_name: bytes, flags: int) -> str | Refusal:
     """Decode a central-directory name exactly as the stdlib would.
 
@@ -247,6 +255,11 @@ def _preflight_central_directory(raw: bytes, limits: ArchiveLimits) -> tuple[str
     follow the EOCD beyond its declared comment, and the first local file
     header must sit at byte zero.
 
+    Multi-disk and spanned metadata is refused before ``ZipFile`` exists:
+    either disk number non-zero, or the per-disk entry count disagreeing with
+    the total. ZIP64 sentinels are classified as ``archive_too_many_parts``
+    first, so a ZIP64 archive is not misreported as multi-disk.
+
     Entry names are decoded and validated from the raw record bytes so the
     verdict is identical on every platform (see :func:`_decode_entry_name`).
     Returns the raw names in record order; the caller reconciles them against
@@ -262,8 +275,8 @@ def _preflight_central_directory(raw: bytes, limits: ArchiveLimits) -> tuple[str
             recovery_options=_RECOVER_VALID_XLSX,
         )
     eocd_absolute = len(raw) - len(tail) + position
-    _disk_entries, total_entries, cd_size, cd_offset = struct.unpack_from(
-        "<HHII", tail, position + 8
+    this_disk, cd_disk, disk_entries, total_entries, cd_size, cd_offset = struct.unpack_from(
+        "<HHHHII", tail, position + 4
     )
     (comment_len,) = struct.unpack_from("<H", tail, position + 20)
     if eocd_absolute + _EOCD_FIXED_SIZE + comment_len != len(raw):
@@ -278,6 +291,18 @@ def _preflight_central_directory(raw: bytes, limits: ArchiveLimits) -> tuple[str
             message="The archive uses ZIP64 metadata, which exceeds every supported limit.",
             details={"declared": "zip64"},
             recovery_options=_RECOVER_SMALLER,
+        )
+    if this_disk != 0 or cd_disk != 0:
+        return _malformed_archive(
+            "archive spans multiple disks",
+            this_disk=this_disk,
+            central_directory_disk=cd_disk,
+        )
+    if disk_entries != total_entries:
+        return _malformed_archive(
+            "disk entry count disagrees with the total",
+            disk_entries=disk_entries,
+            total_entries=total_entries,
         )
     if total_entries > limits.max_part_count:
         return Refusal(
@@ -348,7 +373,9 @@ class WorkbookArchive:
 
     Construct via :meth:`load`. The source file handle is closed before
     :meth:`load` returns; the archive operates on an in-memory snapshot, so
-    later modification of the source file cannot affect this session.
+    later modification of the source file cannot affect this session. The
+    SHA-256 of those snapshot bytes is computed at load and retained as a
+    digest only.
     """
 
     def __init__(
@@ -357,12 +384,14 @@ class WorkbookArchive:
         zip_file: zipfile.ZipFile,
         part_order: tuple[str, ...],
         limits: ArchiveLimits,
+        source_fingerprint: str,
     ) -> None:
         self._source_path = source_path
         self._zip = zip_file
         self._part_order = part_order
         self._part_set = frozenset(part_order)
         self._limits = limits
+        self._source_fingerprint = source_fingerprint
         self._cache: dict[str, bytes] = {}
         self._closed = False
 
@@ -422,6 +451,7 @@ class WorkbookArchive:
         try:
             zip_file = zipfile.ZipFile(io.BytesIO(raw))
         except zipfile.BadZipFile as exc:
+            # zip_file was never assigned; there is nothing to close.
             return Refusal(
                 code="not_a_zip",
                 message=f"The ZIP structure could not be read: {exc}.",
@@ -429,86 +459,129 @@ class WorkbookArchive:
                 recovery_options=_RECOVER_VALID_XLSX,
             )
 
-        infos = zip_file.infolist()
-        if len(infos) != len(raw_names):
-            return _malformed_archive(
-                "the stdlib parsed a different entry count than the central-directory walk",
-                stdlib_entries=len(infos),
-                walked_records=len(raw_names),
+        try:
+            infos = zip_file.infolist()
+            if len(infos) != len(raw_names):
+                return _close_on_refusal(
+                    zip_file,
+                    _malformed_archive(
+                        "the stdlib parsed a different entry count than the central-directory walk",
+                        stdlib_entries=len(infos),
+                        walked_records=len(raw_names),
+                    ),
+                )
+            seen: set[str] = set()
+            order: list[str] = []
+            declared_total = 0
+            for info, raw_name in zip(infos, raw_names, strict=True):
+                name = info.filename
+                if name != raw_name:
+                    # The raw names were already validated; the stdlib must not have
+                    # rewritten any of them, or downstream code would operate on a
+                    # different name than the one the archive actually carries.
+                    return _close_on_refusal(
+                        zip_file,
+                        _malformed_archive(
+                            "the stdlib reported an entry name that differs from the raw record",
+                            raw_name=raw_name,
+                            stdlib_name=name,
+                        ),
+                    )
+                if info.flag_bits & _ENCRYPTED_FLAG_BIT:
+                    return _close_on_refusal(
+                        zip_file,
+                        Refusal(
+                            code="encrypted_archive_entry",
+                            message=f"Archive entry {name!r} is encrypted.",
+                            details={"entry": name},
+                            recovery_options=_RECOVER_UNENCRYPTED,
+                        ),
+                    )
+                if info.is_dir():
+                    continue
+                if info.compress_type not in _SUPPORTED_COMPRESSION:
+                    return _close_on_refusal(
+                        zip_file,
+                        Refusal(
+                            code="unsupported_compression",
+                            message=f"Archive entry {name!r} uses compression method "
+                            f"{info.compress_type}; only stored and deflated entries "
+                            "are supported.",
+                            details={"entry": name, "compress_type": info.compress_type},
+                            recovery_options=_RECOVER_VALID_XLSX,
+                        ),
+                    )
+                if name in seen:
+                    # Duplicate names are a smuggling vector: ZIP consumers disagree
+                    # about which copy wins, so the archive is rejected outright.
+                    return _close_on_refusal(
+                        zip_file,
+                        Refusal(
+                            code="duplicate_archive_entry",
+                            message=f"Archive entry {name!r} appears more than once.",
+                            details={"entry": name},
+                            recovery_options=_RECOVER_TRUSTED_SOURCE,
+                        ),
+                    )
+                seen.add(name)
+                order.append(name)
+
+                if info.file_size > limits.max_part_bytes:
+                    return _close_on_refusal(
+                        zip_file,
+                        Refusal(
+                            code="archive_part_too_large",
+                            message=(
+                                f"Part {name!r} declares {info.file_size} uncompressed bytes; "
+                                f"the limit is {limits.max_part_bytes}."
+                            ),
+                            details={
+                                "entry": name,
+                                "declared_bytes": info.file_size,
+                                "limit_bytes": limits.max_part_bytes,
+                            },
+                            recovery_options=_RECOVER_SMALLER,
+                        ),
+                    )
+                declared_total += info.file_size
+                if declared_total > limits.max_total_bytes:
+                    return _close_on_refusal(
+                        zip_file,
+                        Refusal(
+                            code="archive_expansion_too_large",
+                            message=(
+                                f"Total declared uncompressed size exceeds "
+                                f"{limits.max_total_bytes} bytes."
+                            ),
+                            details={
+                                "declared_total_bytes": declared_total,
+                                "limit_bytes": limits.max_total_bytes,
+                            },
+                            recovery_options=_RECOVER_SMALLER,
+                        ),
+                    )
+
+            return cls(
+                source_path=path,
+                zip_file=zip_file,
+                part_order=tuple(order),
+                limits=limits,
+                source_fingerprint=f"sha256:{hashlib.sha256(raw).hexdigest()}",
             )
-        seen: set[str] = set()
-        order: list[str] = []
-        declared_total = 0
-        for info, raw_name in zip(infos, raw_names, strict=True):
-            name = info.filename
-            if name != raw_name:
-                # The raw names were already validated; the stdlib must not have
-                # rewritten any of them, or downstream code would operate on a
-                # different name than the one the archive actually carries.
-                return _malformed_archive(
-                    "the stdlib reported an entry name that differs from the raw record",
-                    raw_name=raw_name,
-                    stdlib_name=name,
-                )
-            if info.flag_bits & _ENCRYPTED_FLAG_BIT:
-                return Refusal(
-                    code="encrypted_archive_entry",
-                    message=f"Archive entry {name!r} is encrypted.",
-                    details={"entry": name},
-                    recovery_options=_RECOVER_UNENCRYPTED,
-                )
-            if info.is_dir():
-                continue
-            if info.compress_type not in _SUPPORTED_COMPRESSION:
-                return Refusal(
-                    code="unsupported_compression",
-                    message=f"Archive entry {name!r} uses compression method "
-                    f"{info.compress_type}; only stored and deflated entries are supported.",
-                    details={"entry": name, "compress_type": info.compress_type},
-                    recovery_options=_RECOVER_VALID_XLSX,
-                )
-            if name in seen:
-                # Duplicate names are a smuggling vector: ZIP consumers disagree
-                # about which copy wins, so the archive is rejected outright.
-                return Refusal(
-                    code="duplicate_archive_entry",
-                    message=f"Archive entry {name!r} appears more than once.",
-                    details={"entry": name},
-                    recovery_options=_RECOVER_TRUSTED_SOURCE,
-                )
-            seen.add(name)
-            order.append(name)
-
-            if info.file_size > limits.max_part_bytes:
-                return Refusal(
-                    code="archive_part_too_large",
-                    message=f"Part {name!r} declares {info.file_size} uncompressed bytes; "
-                    f"the limit is {limits.max_part_bytes}.",
-                    details={
-                        "entry": name,
-                        "declared_bytes": info.file_size,
-                        "limit_bytes": limits.max_part_bytes,
-                    },
-                    recovery_options=_RECOVER_SMALLER,
-                )
-            declared_total += info.file_size
-            if declared_total > limits.max_total_bytes:
-                return Refusal(
-                    code="archive_expansion_too_large",
-                    message=f"Total declared uncompressed size exceeds {limits.max_total_bytes} "
-                    "bytes.",
-                    details={
-                        "declared_total_bytes": declared_total,
-                        "limit_bytes": limits.max_total_bytes,
-                    },
-                    recovery_options=_RECOVER_SMALLER,
-                )
-
-        return cls(source_path=path, zip_file=zip_file, part_order=tuple(order), limits=limits)
+        except Exception:
+            # Refusal paths already closed. Unexpected failures close, then
+            # re-raise unchanged — they are not operational Refusals.
+            zip_file.close()
+            raise
 
     @property
     def source_path(self) -> Path:
         return self._source_path
+
+    @property
+    def source_fingerprint(self) -> str:
+        """``sha256:`` plus the lowercase hex digest of the loaded snapshot."""
+        return self._source_fingerprint
 
     def part_names(self) -> tuple[str, ...]:
         """All file parts, in archive order (deterministic for identical bytes)."""
@@ -573,14 +646,21 @@ class WorkbookArchive:
 
 
 def _structurally_unsafe_reference(value: str) -> bool:
-    return (
+    if (
         not value
         or "\\" in value
         or "?" in value
         or "#" in value
-        or value.startswith("//")
-        or _URI_SCHEME_RE.match(value) is not None
         or any(ord(character) < 0x20 for character in value)
+    ):
+        return True
+    # The scheme check is anchored and the authority check needs a leading
+    # "//", so a package-root slash would hide both from the raw string while
+    # normalize_package_path strips that slash and leaves the prefix intact
+    # ("/C:/evil.xml" -> "C:/evil.xml"). Check the stripped form too.
+    return any(
+        not form or form.startswith("//") or _URI_SCHEME_RE.match(form) is not None
+        for form in (value, value.lstrip("/"))
     )
 
 

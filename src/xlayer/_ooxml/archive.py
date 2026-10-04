@@ -448,18 +448,18 @@ class WorkbookArchive:
         if isinstance(raw_names, Refusal):
             return raw_names
 
+        zip_file: zipfile.ZipFile | None = None
         try:
-            zip_file = zipfile.ZipFile(io.BytesIO(raw))
-        except zipfile.BadZipFile as exc:
-            # zip_file was never assigned; there is nothing to close.
-            return Refusal(
-                code="not_a_zip",
-                message=f"The ZIP structure could not be read: {exc}.",
-                details={"error": str(exc)},
-                recovery_options=_RECOVER_VALID_XLSX,
-            )
-
-        try:
+            try:
+                zip_file = zipfile.ZipFile(io.BytesIO(raw))
+            except zipfile.BadZipFile as exc:
+                # zip_file was never assigned; there is nothing to close.
+                return Refusal(
+                    code="not_a_zip",
+                    message=f"The ZIP structure could not be read: {exc}.",
+                    details={"error": str(exc)},
+                    recovery_options=_RECOVER_VALID_XLSX,
+                )
             infos = zip_file.infolist()
             if len(infos) != len(raw_names):
                 return _close_on_refusal(
@@ -568,10 +568,12 @@ class WorkbookArchive:
                 limits=limits,
                 source_fingerprint=f"sha256:{hashlib.sha256(raw).hexdigest()}",
             )
-        except Exception:
-            # Refusal paths already closed. Unexpected failures close, then
-            # re-raise unchanged — they are not operational Refusals.
-            zip_file.close()
+        except BaseException:
+            # Cleanup also covers interruption/exit, without swallowing it.
+            # Refusal paths already closed; every other failure propagates
+            # unchanged after releasing the handle we still own.
+            if zip_file is not None:
+                zip_file.close()
             raise
 
     @property

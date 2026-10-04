@@ -12,8 +12,10 @@ import os
 import sys
 import warnings
 import zipfile
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
+from types import FrameType, MethodType
+from typing import TypeAlias, cast
 
 import pytest
 
@@ -26,6 +28,7 @@ from xlayer._ooxml.archive import (
 )
 
 _XML = b'<?xml version="1.0"?><root/>'
+TraceHook: TypeAlias = Callable[[FrameType, str, object], "TraceHook | None"]
 
 
 def build_zip(path: Path, entries: Mapping[str, bytes]) -> Path:
@@ -573,6 +576,60 @@ class TestFailureCleanup:
             load(path)
         assert type(caught.value) is RuntimeError
         self._assert_explicitly_closed(retained)
+
+    @pytest.mark.parametrize("failure", [KeyboardInterrupt("cancelled"), SystemExit("stopped")])
+    def test_interruption_closes_and_propagates_unchanged(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: BaseException
+    ) -> None:
+        path = build_zip(tmp_path / "ok.xlsx", {"a.xml": _XML})
+        retained = self._retain_constructed_zips(monkeypatch)
+
+        def interrupt(_data: object) -> object:
+            raise failure
+
+        monkeypatch.setattr(hashlib, "sha256", interrupt)
+        try:
+            with pytest.raises(type(failure)) as caught:
+                load(path)
+            assert caught.value is failure
+            self._assert_explicitly_closed(retained)
+        finally:
+            for zip_file in retained:
+                zip_file.close()
+
+    def test_interruption_immediately_after_zip_assignment_closes(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        path = build_zip(tmp_path / "ok.xlsx", {"a.xml": _XML})
+        retained = self._retain_constructed_zips(monkeypatch)
+        target = cast("MethodType", WorkbookArchive.load).__func__.__code__
+        failure = KeyboardInterrupt("interrupted after ZIP acquisition")
+        fired = False
+
+        def interrupt(frame: FrameType, event: str, _arg: object) -> TraceHook | None:
+            nonlocal fired
+            if (
+                event == "line"
+                and frame.f_code is target
+                and isinstance(frame.f_locals.get("zip_file"), zipfile.ZipFile)
+            ):
+                fired = True
+                sys.settrace(None)
+                raise failure
+            return interrupt
+
+        previous = sys.gettrace()
+        try:
+            sys.settrace(interrupt)
+            with pytest.raises(KeyboardInterrupt) as caught:
+                load(path)
+            assert fired, "probe never reached successful ZIP acquisition"
+            assert caught.value is failure
+            self._assert_explicitly_closed(retained)
+        finally:
+            sys.settrace(previous)
+            for zip_file in retained:
+                zip_file.close()
 
     def test_stdlib_entry_count_mismatch_closes(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

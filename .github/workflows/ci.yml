@@ -74,3 +74,5 @@ jobs:
           assert 'site-packages' in resolved.parts, resolved
           print('sdist import resolved from', resolved)
           "
+          /tmp/sdist-env/bin/python -m pip install pytest
+          /tmp/sdist-env/bin/python -m pytest tests/packaging

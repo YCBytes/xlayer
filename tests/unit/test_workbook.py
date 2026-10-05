@@ -130,6 +130,44 @@ def expect_refusal(result: WorkbookRegistry | Refusal, code: str) -> Refusal:
     return result
 
 
+@pytest.mark.parametrize(
+    "extra,names,sheets",
+    [
+        (f"<sheets>{_SHEET1}</sheets>", "", _SHEET1),
+        (
+            '<definedNames><definedName name="N">S1!$A$1</definedName></definedNames>',
+            '<definedName name="M">S1!$A$1</definedName>',
+            _SHEET1,
+        ),
+        (f"<wrapper>{_SHEET1}</wrapper>", "", _SHEET1),
+        ("", "", f"<wrapper>{_SHEET1}</wrapper>"),
+        ("", '<wrapper><definedName name="N">S1!$A$1</definedName></wrapper>', _SHEET1),
+        ("", '<definedName name="N">S1!$A$1<extra/>+1</definedName>', _SHEET1),
+        ("", "", '<sheet name="S1" sheetId="1" r:id="rId1"><extra/></sheet>'),
+    ],
+)
+def test_registry_inventory_is_not_silently_truncated(
+    tmp_path: Path, extra: str, names: str, sheets: str
+) -> None:
+    xml = _workbook(extra=extra, names=names, sheets=sheets)
+    expect_refusal(parse_registry(tmp_path, standard_parts(xml)), "invalid_part_content")
+
+
+def test_registry_process_content_refuses(tmp_path: Path) -> None:
+    xml = _workbook().replace(
+        b"<workbook ",
+        b'<workbook xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" '
+        b'mc:ProcessContent="x:any" ',
+    )
+    expect_refusal(parse_registry(tmp_path, standard_parts(xml)), "invalid_part_content")
+
+
+def test_unused_broken_name_is_still_raw_metadata(tmp_path: Path) -> None:
+    xml = _workbook(names='<definedName name="Bad">#REF!</definedName>')
+    registry = expect_registry(parse_registry(tmp_path, standard_parts(xml)))
+    assert registry.defined_names[0].text == "#REF!"
+
+
 def load_fixture(name: str) -> tuple[WorkbookArchive, PackageInfo, WorkbookRegistry]:
     archive = WorkbookArchive.load(FIXTURES / name)
     assert isinstance(archive, WorkbookArchive)

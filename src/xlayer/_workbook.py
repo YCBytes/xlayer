@@ -12,8 +12,18 @@ import os
 from pathlib import Path
 from types import TracebackType
 
+from xlayer._dependencies import (
+    _QUERY,
+    DEFAULT_IMPACT_LIMITS,
+    CellRef,
+    DependencyImpact,
+    ImpactLimits,
+    _canonical_address,
+    analyse_dependencies,
+)
 from xlayer._errors import ClosedWorkbookError, Refusal, WorkbookOpenError
 from xlayer._ooxml.archive import DEFAULT_LIMITS, ArchiveLimits, WorkbookArchive
+from xlayer._ooxml.formula import _endpoint
 from xlayer._ooxml.package import parse_package
 from xlayer._ooxml.sheet import Worksheet, parse_worksheet
 from xlayer._ooxml.strings import parse_shared_strings
@@ -128,6 +138,76 @@ class Workbook:
             # leaves an open session usable; interruption during validation
             # and unexpected TypeErrors in the reader still close.
             if not invalid_name or not isinstance(exc, TypeError):
+                self.close()
+            raise
+
+    def dependency_impact(
+        self, sheet_name: str, address: str, *, limits: ImpactLimits = DEFAULT_IMPACT_LIMITS
+    ) -> DependencyImpact | Refusal:
+        """Analyze bounded potential references, not recalculation or edit safety.
+
+        Rebuild the index from this snapshot on each call. Ordinary worksheet
+        refusals become coverage issues; unexpected failures end the session.
+        Returned evidence is detached and remains usable after close.
+        """
+        argument_error: BaseException | None = None
+        try:
+            if self._archive is None:
+                raise ClosedWorkbookError("The workbook is closed.")
+            valid_types = (
+                isinstance(sheet_name, str),
+                isinstance(address, str),
+                isinstance(limits, ImpactLimits),
+            )
+            if not all(valid_types):
+                argument_error = TypeError(
+                    "sheet_name/address must be strings; limits must be ImpactLimits"
+                )
+                raise argument_error
+            valid_coordinate = (
+                _QUERY.fullmatch(address) is not None and _endpoint(address) is not None
+            )
+            if not valid_coordinate:
+                argument_error = ValueError(
+                    "address must be an unadorned in-grid ASCII A1 coordinate"
+                )
+                raise argument_error
+            canonical = _canonical_address(address)
+            registry = self.registry
+            sheet = registry.sheet_by_name(sheet_name)
+            if sheet is None:
+                names = [entry.name for entry in registry.sheets]
+                return Refusal(
+                    code="sheet_not_found",
+                    message=f"No sheet named {sheet_name!r} exists in this workbook.",
+                    operation="dependency_impact",
+                    target=sheet_name,
+                    details={"requested_name": sheet_name, "available_names": names},
+                    recovery_options=(
+                        {"action": "choose_existing_sheet", "available_names": names},
+                    ),
+                )
+            if sheet.kind != "worksheet":
+                names = [entry.name for entry in registry.sheets if entry.kind == "worksheet"]
+                return Refusal(
+                    code="unsupported_sheet_kind",
+                    message=f"Dependency analysis does not read {sheet.kind} tabs.",
+                    operation="dependency_impact",
+                    target=sheet_name,
+                    details={"requested_name": sheet_name, "kind": sheet.kind},
+                    recovery_options=({"action": "choose_worksheet", "available_names": names},),
+                )
+            return analyse_dependencies(
+                registry,
+                self.read_sheet,
+                CellRef(sheet.name, canonical),
+                self.source_fingerprint,
+                limits,
+            )
+        except BaseException as exc:
+            # Exempt only the exact error we deliberately constructed. A reader,
+            # lookup or validation helper's TypeError/ValueError still closes.
+            if exc is not argument_error:
                 self.close()
             raise
 

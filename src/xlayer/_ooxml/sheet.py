@@ -196,6 +196,10 @@ def parse_worksheet(
         return _invalid_part(part, "duplicate sheetData")
     sheet_data = sheet_data_children[0]
 
+    inventory = _validate_grid_inventory(root, part)
+    if inventory is not None:
+        return inventory
+
     dimension_elem = root.find(_DIMENSION_TAG)
     declared_dimension: str | None = None
     if dimension_elem is not None:
@@ -240,6 +244,35 @@ def parse_worksheet(
         used_range=_used_range(cells),
         other_elements=other_elements,
     )
+
+
+def _validate_grid_inventory(root: ET.Element, part: str) -> Refusal | None:
+    """Require a modeled grid; never collect cells from extension wrappers."""
+    process = "{http://schemas.openxmlformats.org/markup-compatibility/2006}ProcessContent"
+    ext = f"{{{_NS}}}extLst"
+    admitted = {id(root)}
+    for data in root.findall(_SHEET_DATA_TAG):
+        admitted.add(id(data))
+        for row in data:
+            if row.tag != _ROW_TAG:
+                return _invalid_part(part, "unexpected sheetData child", tag=row.tag)
+            admitted.add(id(row))
+            for cell in row:
+                if cell.tag == ext:
+                    continue
+                if cell.tag != _CELL_TAG:
+                    return _invalid_part(part, "unexpected row child", tag=cell.tag)
+                admitted.add(id(cell))
+                for payload in cell:
+                    if payload.tag not in {_F_TAG, _V_TAG, _IS_TAG, ext}:
+                        return _invalid_part(part, "unexpected cell child", tag=payload.tag)
+    for element in root.iter():
+        known = id(element) in admitted
+        if element.tag in {_SHEET_DATA_TAG, _ROW_TAG, _CELL_TAG} and not known:
+            return _invalid_part(part, "displaced grid fragment", tag=element.tag)
+        if known and process in element.attrib:
+            return _invalid_part(part, "unsupported grid ProcessContent", tag=element.tag)
+    return None
 
 
 def _parse_merges(root: ET.Element, part: str) -> tuple[MergeRange, ...] | Refusal:

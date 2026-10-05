@@ -115,6 +115,10 @@ def parse_workbook_registry(
     if root.tag != _WORKBOOK_ROOT_TAG:
         return _invalid_part(part, "unexpected root element", root_tag=root.tag)
 
+    inventory = _validate_registry_inventory(root, part)
+    if inventory is not None:
+        return inventory
+
     sheets = _parse_sheets(root, archive, package, part)
     if isinstance(sheets, Refusal):
         return sheets
@@ -142,6 +146,37 @@ def parse_workbook_registry(
         date1904=date1904,
         external_reference_ids=external_ids,
     )
+
+
+def _validate_registry_inventory(root: ET.Element, part: str) -> Refusal | None:
+    """Reject inventories that direct-child parsing would truncate or omit."""
+    process = "{http://schemas.openxmlformats.org/markup-compatibility/2006}ProcessContent"
+    tags = {_SHEETS_TAG, _SHEET_TAG, _DEFINED_NAMES_TAG, _DEFINED_NAME_TAG}
+    admitted = {id(root)}
+    for block_tag, item_tag, required in (
+        (_SHEETS_TAG, _SHEET_TAG, True),
+        (_DEFINED_NAMES_TAG, _DEFINED_NAME_TAG, False),
+    ):
+        blocks = [child for child in root if child.tag == block_tag]
+        if len(blocks) > 1:
+            return _invalid_part(part, "duplicate registry inventory block", tag=block_tag)
+        if required and not blocks:
+            return _invalid_part(part, "workbook has no sheets")
+        for block in blocks:
+            admitted.add(id(block))
+            for item in block:
+                if item.tag != item_tag:
+                    return _invalid_part(part, "unexpected registry inventory child", tag=item.tag)
+                if len(item):
+                    return _invalid_part(part, "nested registry inventory payload", tag=item.tag)
+                admitted.add(id(item))
+    for element in root.iter():
+        known = id(element) in admitted
+        if element.tag in tags and not known:
+            return _invalid_part(part, "displaced registry inventory fragment", tag=element.tag)
+        if known and process in element.attrib:
+            return _invalid_part(part, "unsupported registry ProcessContent", tag=element.tag)
+    return None
 
 
 def _parse_sheets(

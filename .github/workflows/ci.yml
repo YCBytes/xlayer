@@ -41,19 +41,22 @@ jobs:
 
   packaging:
     runs-on: ubuntu-latest
+    env:
+      XLAYER_ARTIFACT_DIR: ${{ runner.temp }}/xlayer-artifacts
+      XLAYER_REQUIRE_INSTALLED: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
       - run: python -m pip install --upgrade pip build twine
-      - run: python -m build
-      - run: python -m twine check --strict dist/*
-      - name: Clean-environment install and import smoke (wheel)
+      - run: python -m build --outdir "$XLAYER_ARTIFACT_DIR"
+      - run: python -m twine check --strict "$XLAYER_ARTIFACT_DIR"/*
+      - name: Clean-environment install and full suite (wheel)
         run: |
           python -m venv /tmp/wheel-env
           /tmp/wheel-env/bin/python -m pip install --upgrade pip
-          /tmp/wheel-env/bin/python -m pip install dist/*.whl
+          /tmp/wheel-env/bin/python -m pip install --no-deps "$XLAYER_ARTIFACT_DIR"/*.whl
           /tmp/wheel-env/bin/python -c "
           import pathlib, xlayer
           resolved = pathlib.Path(xlayer.__file__).resolve()
@@ -61,13 +64,13 @@ jobs:
           print('wheel import resolved from', resolved)
           "
           /tmp/wheel-env/bin/python -m pip install pytest
-          /tmp/wheel-env/bin/python -m pytest tests/packaging
+          /tmp/wheel-env/bin/python -m pytest tests
 
-      - name: Clean-environment install and import smoke (sdist)
+      - name: Clean-environment install and full suite (sdist)
         run: |
           python -m venv /tmp/sdist-env
           /tmp/sdist-env/bin/python -m pip install --upgrade pip
-          /tmp/sdist-env/bin/python -m pip install dist/*.tar.gz
+          /tmp/sdist-env/bin/python -m pip install --no-deps "$XLAYER_ARTIFACT_DIR"/*.tar.gz
           /tmp/sdist-env/bin/python -c "
           import pathlib, xlayer
           resolved = pathlib.Path(xlayer.__file__).resolve()
@@ -75,4 +78,4 @@ jobs:
           print('sdist import resolved from', resolved)
           "
           /tmp/sdist-env/bin/python -m pip install pytest
-          /tmp/sdist-env/bin/python -m pytest tests/packaging
+          /tmp/sdist-env/bin/python -m pytest tests

@@ -1,0 +1,30 @@
+{
+  "oracle": "Selected facts transcribed from raw OOXML, not analyzer output",
+  "analysis_status": "partial",
+  "queries": [
+    {"sheet": "formulas", "address": "E8",
+     "direct": [["formulas", "B8"]], "transitive": [],
+     "master": ["formulas", "B8"], "formula_text": "E8*F8", "span": [0, 2]},
+    {"sheet": "ref_data", "address": "A2",
+     "direct": [["ref_data", "A12"], ["formulas", "B4"], ["formulas", "B6"],
+       ["formulas", "B13"], ["formulas", "B15"], ["formulas", "B17"],
+       ["cross_sheet_refs", "B4"], ["cross_sheet_refs", "B5"],
+       ["cross_sheet_refs", "B6"], ["cross_sheet_refs", "B9"], ["cross_sheet_refs", "B10"]],
+     "transitive": [["cross_sheet_refs", "B8"]]},
+    {"sheet": "ref_data", "address": "B12",
+     "direct": [["cross_sheet_refs", "B10"]], "transitive": []},
+    {"sheet": "sheet_structure", "address": "B107",
+     "direct": [["sheet_structure", "C107"], ["sheet_structure", "E107"], ["sheet_structure", "F107"]],
+     "transitive": [["sheet_structure", "D107"]]},
+    {"sheet": "cross_sheet_refs", "address": "B13",
+     "direct": [["cross_sheet_refs", "D13"]], "transitive": [],
+     "cycles": [[["cross_sheet_refs", "B13"], ["cross_sheet_refs", "D13"]]]}
+  ],
+  "shared_horizontal": {
+    "sheet": "merged_cells", "root_row": 4, "columns": ["B", "C", "D", "E", "F", "G", "H"],
+    "dependent_row": 11, "master": ["merged_cells", "B11"],
+    "formula_text": "SUM(B4:B9)", "span": [4, 9], "normalized_rows": [4, 9]
+  },
+  "required_issue_sites": [["formulas", "B16"], ["formulas", "B18"],
+    ["formulas", "B19"], ["formulas", "B20"], ["formulas", "B23"]]
+}

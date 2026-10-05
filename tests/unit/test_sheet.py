@@ -165,6 +165,55 @@ def expect_refusal(result: Worksheet | Refusal, code: str) -> Refusal:
     return result
 
 
+@pytest.mark.parametrize(
+    "body",
+    [
+        '<sheetData><wrapper><row r="1"><c r="B1"><f>A1</f></c></row></wrapper></sheetData>',
+        '<sheetData><row r="1"><wrapper><c r="B1"><f>A1</f></c></wrapper></row></sheetData>',
+        '<sheetData><row r="1"><c r="B1"><wrapper><f>A1</f></wrapper></c></row></sheetData>',
+    ],
+)
+def test_grid_wrapper_cannot_hide_formula(tmp_path: Path, body: str) -> None:
+    expect_refusal(parse_sheet(tmp_path, worksheet_xml(body)), "invalid_part_content")
+
+
+@pytest.mark.parametrize("container", ["wrapper", "extLst"])
+def test_displaced_grid_fragment_refuses(tmp_path: Path, container: str) -> None:
+    body = f'<sheetData/><{container}><row><c r="B1"><f>A1</f></c></row></{container}>'
+    expect_refusal(parse_sheet(tmp_path, worksheet_xml(body)), "invalid_part_content")
+
+
+@pytest.mark.parametrize("location", ["root", "sheetData", "row", "c"])
+def test_grid_process_content_refuses(tmp_path: Path, location: str) -> None:
+    mc = 'xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"'
+    attr = ' mc:ProcessContent="x:any"'
+    body = (
+        f"<sheetData{attr if location == 'sheetData' else ''}>"
+        f'<row r="1"{attr if location == "row" else ""}>'
+        f'<c r="B1"{attr if location == "c" else ""}><f>A1</f></c></row></sheetData>'
+    )
+    attrs = mc + (attr if location == "root" else "")
+    expect_refusal(
+        parse_sheet(tmp_path, worksheet_xml(body, root_attrs=attrs)), "invalid_part_content"
+    )
+
+
+def test_benign_grid_extensions_remain_readable(tmp_path: Path) -> None:
+    body = (
+        '<sheetData><row r="1"><c r="B1"><f>A1</f><extLst><ext/></extLst></c>'
+        "<extLst><ext/></extLst></row></sheetData>"
+        '<mc:AlternateContent><mc:Choice Requires="x"><drawing/></mc:Choice>'
+        "</mc:AlternateContent>"
+    )
+    attrs = (
+        'xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" '
+        'mc:Ignorable="x" xmlns:x="urn:extension" x:flag="1"'
+    )
+    sheet = expect_sheet(parse_sheet(tmp_path, worksheet_xml(body, root_attrs=attrs)))
+    assert sheet.cells["B1"].formula is not None
+    assert sheet.cells["B1"].formula.text == "A1"
+
+
 class TestWorksheetIdentity:
     def test_empty_sheet_has_no_cells_or_used_range(self, tmp_path: Path) -> None:
         xml = worksheet_xml("<sheetData/>")

@@ -1,0 +1,42 @@
+{
+  "schema_version": "1.0",
+  "dependency_contract_version": "1.0",
+  "source_fingerprint": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "root": {"sheet": "S", "address": "A1"},
+  "scope": "worksheet_cell_formulas",
+  "analysis_status": "complete",
+  "direct_dependents": [{"sheet": "S", "address": "B1"}],
+  "transitive_dependents": [],
+  "known_direct_count": 1,
+  "known_transitive_count": 0,
+  "exact_total_count": 1,
+  "evidence_edges": [{
+    "precedent": {"sheet": "S", "address": "A1"},
+    "dependent": {"sheet": "S", "address": "B1"},
+    "evidence": {
+      "formula_cell": {"sheet": "S", "address": "B1"},
+      "formula_text": "A1", "source_span": [0, 2], "occurrence_index": 0,
+      "reference_text": "A1",
+      "normalized_reference": {"sheet": "S", "min_row": 1, "min_column": 1, "max_row": 1, "max_column": 1},
+      "reference_kind": "cell", "basis": ["direct_ooxml"],
+      "name_definition": null, "shared_master": null, "shared_offset": null
+    }
+  }],
+  "predecessor_edges": [{"cell": {"sheet": "S", "address": "B1"}, "edge_index": 0}],
+  "known_cycles": [], "issues": [], "inventory_frontier": [], "traversal_frontier": [],
+  "excluded_tabs": [],
+  "limits": {
+    "max_sheets": 256, "max_scanned_cells": 250000, "max_defined_names": 10000,
+    "max_formula_cells": 25000, "max_formula_chars": 8192, "max_formula_nesting": 64,
+    "max_references": 100000, "max_membership_checks": 1000000,
+    "max_visited_nodes": 10000, "max_evidence_edges": 50000
+  },
+  "work": {
+    "sheets_attempted": 1, "trusted_sheets": 1, "scanned_cells": 1,
+    "defined_names_admitted": 0, "formula_cells_attempted": 1,
+    "max_formula_chars_observed": 2, "max_formula_nesting_observed": 0,
+    "references_admitted": 1, "membership_checks": 0, "visited_nodes": 2,
+    "evidence_edges_admitted": 1
+  },
+  "alternate_paths_enumerated": false
+}

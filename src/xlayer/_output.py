@@ -58,7 +58,8 @@ class OutputSpec:
         return {
             "output_path": str(self.path),
             "supplied_parent": str(self.supplied_parent),
-            "parent_identity": list(self.parent_identity),
+            # Native filesystem IDs are opaque, not signed-64-bit JSON numbers.
+            "parent_identity": [str(component) for component in self.parent_identity],
             "overwrite": self.overwrite,
             "publication_mode": "replace" if self.overwrite else "exclusive_link",
             "receipt_persistence": "returned_host_saves",

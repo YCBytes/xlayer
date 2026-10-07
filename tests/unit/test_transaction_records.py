@@ -43,7 +43,16 @@ def test_no_implicit_coercion(value: object) -> None:
 
 
 @pytest.mark.parametrize(
-    "value", [float("nan"), float("inf"), 10**15, -(10**15), "\ud800", "a" * 32768, "\n" * 254]
+    "value",
+    [
+        pytest.param(float("nan"), id="nan"),
+        pytest.param(float("inf"), id="infinity"),
+        pytest.param(10**15, id="positive-integer-limit"),
+        pytest.param(-(10**15), id="negative-integer-limit"),
+        pytest.param("\ud800", id="unpaired-surrogate"),
+        pytest.param("a" * 32768, id="overlong-string"),
+        pytest.param("\n" * 254, id="too-many-linefeeds"),
+    ],
 )
 def test_value_bounds(value: object) -> None:
     with pytest.raises(ValueError):
@@ -81,6 +90,20 @@ def test_json_domain_refuses_cycles_nonstring_keys_and_nonfinite_values() -> Non
     for value in (cycle, {1: "bad"}, {"x": float("nan")}, {"x": date(2024, 1, 1)}):
         with pytest.raises((TypeError, ValueError)):
             freeze_json(value)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        pytest.param(9223372036854775808, id="above-signed-64"),
+        pytest.param(-9223372036854775809, id="below-signed-64"),
+    ],
+)
+def test_canonical_json_still_refuses_out_of_domain_integers(value: int) -> None:
+    from xlayer._canonical import canonical_json
+
+    with pytest.raises(ValueError, match="outside signed 64-bit range"):
+        canonical_json({"value": value})
 
 
 def test_preview_copies_and_freezes_nested_evidence() -> None:

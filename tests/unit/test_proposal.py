@@ -2,16 +2,20 @@
 
 from __future__ import annotations
 
+import json
 import os
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
 
 from tests.unit._dependency_cases import write_workbook_case
+from xlayer._canonical import canonical_json
 from xlayer._dependencies import ImpactLimits
 from xlayer._edits import SetValue
 from xlayer._errors import ClosedWorkbookError, Refusal
+from xlayer._output import OutputSpec
 from xlayer._workbook import Workbook
 
 if TYPE_CHECKING:
@@ -33,6 +37,70 @@ def source(tmp_path: Path) -> Path:
             '<c r="C1"><f>A1*B1</f><v>200</v></c></row></sheetData>'
         },
     )
+
+
+@pytest.mark.parametrize(
+    ("identity", "encoded"),
+    [
+        pytest.param((1, 2), ["1", "2"], id="small-identifiers"),
+        pytest.param(
+            (9223372036854775807, 9223372036854775808),
+            ["9223372036854775807", "9223372036854775808"],
+            id="signed-64-boundary",
+        ),
+        pytest.param(
+            (17594508763472084922, 170141183460469231731687303715884105735),
+            ["17594508763472084922", "170141183460469231731687303715884105735"],
+            id="windows-and-wide-identifiers",
+        ),
+    ],
+)
+def test_output_identity_serializes_losslessly_without_changing_native_binding(
+    tmp_path: Path, identity: tuple[int, int], encoded: list[str]
+) -> None:
+    spec = OutputSpec(tmp_path, tmp_path, identity, "out.xlsx", False)
+    data = spec.to_dict()
+    assert data["parent_identity"] == encoded
+    assert json.loads(canonical_json(data))["parent_identity"] == encoded
+    assert spec.parent_identity == identity
+    assert all(type(component) is int for component in spec.parent_identity)
+
+
+def test_proposal_digest_keeps_both_large_filesystem_identity_components(tmp_path: Path) -> None:
+    with Workbook.open(source(tmp_path)) as book:
+        original = propose(book, [SetValue("Inputs", "A1", 120)], tmp_path / "out.xlsx")
+        assert not isinstance(original, Refusal)
+        output = replace(
+            original.output,
+            parent_identity=(17594508763472084922, 170141183460469231731687303715884105735),
+        )
+        baseline = replace(original, output=output)
+        repeated = replace(original, output=output)
+        changed_device = replace(
+            original,
+            output=replace(
+                output,
+                parent_identity=(17594508763472084923, 170141183460469231731687303715884105735),
+            ),
+        )
+        changed_inode = replace(
+            original,
+            output=replace(
+                output,
+                parent_identity=(17594508763472084922, 170141183460469231731687303715884105736),
+            ),
+        )
+        assert baseline.proposal_digest == repeated.proposal_digest
+        assert (
+            len(
+                {
+                    baseline.proposal_digest,
+                    changed_device.proposal_digest,
+                    changed_inode.proposal_digest,
+                }
+            )
+            == 3
+        )
 
 
 def test_preview_exact_facts_and_approval_requirements(tmp_path: Path) -> None:

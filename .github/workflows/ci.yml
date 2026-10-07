@@ -42,9 +42,10 @@ jobs:
   packaging:
     runs-on: ubuntu-latest
     env:
-      XLAYER_ARTIFACT_DIR: ${{ runner.temp }}/xlayer-artifacts
       XLAYER_REQUIRE_INSTALLED: "1"
     steps:
+      - name: Set artifact directory
+        run: echo "XLAYER_ARTIFACT_DIR=$RUNNER_TEMP/xlayer-artifacts" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:

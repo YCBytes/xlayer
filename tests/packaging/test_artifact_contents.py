@@ -45,6 +45,13 @@ WHEEL_PAYLOAD = frozenset(
         "xlayer/_errors.py",
         "xlayer/_workbook.py",
         "xlayer/_dependencies.py",
+        "xlayer/_canonical.py",
+        "xlayer/_edits.py",
+        "xlayer/_approval.py",
+        "xlayer/_preview.py",
+        "xlayer/_receipt.py",
+        "xlayer/_batch_impact.py",
+        "xlayer/_edit_validation.py",
         "xlayer/_ooxml/__init__.py",
         "xlayer/_ooxml/archive.py",
         "xlayer/_ooxml/package.py",
@@ -54,6 +61,7 @@ WHEEL_PAYLOAD = frozenset(
         "xlayer/_ooxml/_text.py",
         "xlayer/_ooxml/sheet.py",
         "xlayer/_ooxml/formula.py",
+        "xlayer/_ooxml/patch.py",
     }
 )
 

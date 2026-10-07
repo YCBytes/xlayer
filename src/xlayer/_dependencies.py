@@ -1088,7 +1088,24 @@ def _traversal_is_consistent(
     )
 
 
-def _traverse(index: _ReferenceIndex, root: CellRef, limits: ImpactLimits) -> _Traversal:
+@dataclass
+class _TraversalBudget:
+    checks: int = 0
+    nodes: int = 0
+    edges: int = 0
+
+
+def _traverse(
+    index: _ReferenceIndex,
+    root: CellRef,
+    limits: ImpactLimits,
+    *,
+    shared_budget: _TraversalBudget | None = None,
+) -> _Traversal:
+    if shared_budget is not None:
+        if shared_budget.nodes >= limits.max_visited_nodes:
+            raise ValueError("batch must check root admission before starting traversal")
+        shared_budget.nodes += 1
     queue = deque([root])
     depths = {root: 0}
     predecessors: dict[CellRef, DependencyEdge] = {}
@@ -1108,17 +1125,24 @@ def _traverse(index: _ReferenceIndex, root: CellRef, limits: ImpactLimits) -> _T
             phase: Literal["match_candidate", "admit_edge"] = "admit_edge"
             budget: str | None = None
             if _area(candidate.normalized_reference):
-                if work["membership_checks"] >= limits.max_membership_checks:
+                checks = (
+                    work["membership_checks"] if shared_budget is None else shared_budget.checks
+                )
+                if checks >= limits.max_membership_checks:
                     phase, budget = "match_candidate", "max_membership_checks"
                 else:
                     work["membership_checks"] += 1
+                    if shared_budget is not None:
+                        shared_budget.checks += 1
                     if not candidate.normalized_reference.contains(current):
                         continue
             if budget is None:
-                if len(edges) >= limits.max_evidence_edges:
+                edge_count = len(edges) if shared_budget is None else shared_budget.edges
+                node_count = len(depths) if shared_budget is None else shared_budget.nodes
+                if edge_count >= limits.max_evidence_edges:
                     budget = "max_evidence_edges"
                 elif (
-                    candidate.formula_cell not in depths and len(depths) >= limits.max_visited_nodes
+                    candidate.formula_cell not in depths and node_count >= limits.max_visited_nodes
                 ):
                     budget = "max_visited_nodes"
             if budget is not None:
@@ -1133,9 +1157,15 @@ def _traverse(index: _ReferenceIndex, root: CellRef, limits: ImpactLimits) -> _T
                     TraversalCursor(cell, depths[cell], "queued", None) for cell in queue
                 )
                 consumed = {
-                    "max_membership_checks": work["membership_checks"],
-                    "max_evidence_edges": len(edges),
-                    "max_visited_nodes": len(depths),
+                    "max_membership_checks": work["membership_checks"]
+                    if shared_budget is None
+                    else shared_budget.checks,
+                    "max_evidence_edges": len(edges)
+                    if shared_budget is None
+                    else shared_budget.edges,
+                    "max_visited_nodes": len(depths)
+                    if shared_budget is None
+                    else shared_budget.nodes,
                 }[budget]
                 issues.append(
                     _issue(
@@ -1151,7 +1181,11 @@ def _traverse(index: _ReferenceIndex, root: CellRef, limits: ImpactLimits) -> _T
                 break
             edge = DependencyEdge(current, candidate.formula_cell, candidate)
             edges.append(edge)
+            if shared_budget is not None:
+                shared_budget.edges += 1
             if edge.dependent not in depths:
+                if shared_budget is not None:
+                    shared_budget.nodes += 1
                 depths[edge.dependent] = depths[current] + 1
                 predecessors[edge.dependent] = edge
                 queue.append(edge.dependent)
@@ -1284,6 +1318,19 @@ def analyse_dependencies(
 ) -> DependencyImpact:
     """Build an ephemeral workbook inventory and bounded reverse closure."""
     index = _build_index(registry, read_sheet, source_fingerprint, limits)
+    return _impact_from_index(registry, index, root, source_fingerprint, limits)
+
+
+def _impact_from_index(
+    registry: WorkbookRegistry,
+    index: _ReferenceIndex,
+    root: CellRef,
+    source_fingerprint: str,
+    limits: ImpactLimits,
+    *,
+    shared_budget: _TraversalBudget | None = None,
+) -> DependencyImpact:
+    """Compose evidence from one inventory; the standalone contract is unchanged."""
     issues = list(index.issues)
     if root.sheet not in index.sheet_order or not _index_is_consistent(
         index, registry, source_fingerprint
@@ -1303,7 +1350,11 @@ def analyse_dependencies(
         trusted = index.work.trusted_sheets > 0
     if not trusted:
         return _unknown_impact(root, source_fingerprint, limits, index, issues)
-    traversed = _traverse(index, root, limits)
+    traversed = (
+        _traverse(index, root, limits)
+        if shared_budget is None
+        else _traverse(index, root, limits, shared_budget=shared_budget)
+    )
     issues.extend(traversed.issues)
     if not _traversal_is_consistent(traversed, index, root, limits):
         issues.append(

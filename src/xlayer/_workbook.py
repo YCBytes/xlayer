@@ -9,8 +9,14 @@ Use a context manager or explicit close. No thread-safety guarantee is made.
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from types import TracebackType
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from xlayer._edits import SetValue
+    from xlayer._proposal import Proposal
 
 from xlayer._dependencies import (
     _QUERY,
@@ -48,6 +54,9 @@ class Workbook:
         self._shared_strings = shared_strings
         self._styles = styles
         self._sheet_cache: dict[str, Worksheet | Refusal] = {}
+        self._source_binding = archive.source_path.absolute()
+        self._source_resolved = self._source_binding
+        self._source_file_identity: tuple[int, int] | None = None
 
     @classmethod
     def open(
@@ -57,6 +66,25 @@ class Workbook:
         if not isinstance(limits, ArchiveLimits):
             raise TypeError("limits must be an ArchiveLimits instance")
         source = Path(path)
+        # Separate execution binding captured BEFORE reading, while the public
+        # display property retains the caller's relative path unchanged.
+        binding = source.absolute()
+        try:
+            resolved = binding.resolve()
+        except (OSError, RuntimeError) as exc:
+            raise WorkbookOpenError(
+                Refusal(
+                    code="invalid_path",
+                    message="The source path cannot be resolved.",
+                    details={"path": str(source), "reason": str(exc)},
+                    recovery_options=({"action": "verify_file_path"},),
+                )
+            ) from exc
+        try:
+            info = binding.stat()
+            file_identity: tuple[int, int] | None = (info.st_dev, info.st_ino)
+        except OSError:
+            file_identity = None  # load supplies the operational refusal
         archive: WorkbookArchive | Refusal | None = None
         try:
             archive = WorkbookArchive.load(source, limits)
@@ -74,7 +102,11 @@ class Workbook:
             styles = parse_styles(archive, package)
             if isinstance(styles, Refusal):
                 raise WorkbookOpenError(styles)
-            return cls(archive, registry, shared_strings, styles)
+            result = cls(archive, registry, shared_strings, styles)
+            result._source_binding = binding
+            result._source_resolved = resolved
+            result._source_file_identity = file_identity
+            return result
         except BaseException:
             # Cleanup only: operational refusals and unexpected interruptions
             # keep their original exception/evidence after releasing ownership.
@@ -224,6 +256,22 @@ class Workbook:
             self._shared_strings = ()
             self._styles = ()
             self._sheet_cache.clear()
+
+    def propose(
+        self,
+        edits: Sequence[SetValue],
+        *,
+        output_path: str | os.PathLike[str],
+        overwrite: bool = False,
+        limits: ImpactLimits = DEFAULT_IMPACT_LIMITS,
+        annotations: Mapping[str, object] | None = None,
+    ) -> Proposal | Refusal:
+        """Private existing-cell SetValue intent; never writes or self-approves."""
+        from xlayer._proposal import create_proposal
+
+        return create_proposal(
+            self, edits, output_path, overwrite, limits=limits, annotations=annotations
+        )
 
     def __enter__(self) -> Workbook:
         if self.closed:

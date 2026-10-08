@@ -60,7 +60,12 @@ def write_archive(
     with zipfile.ZipFile(handle, "w", allowZip64=False) as output:
         output.comment = archive._zip.comment
         for info, data in payloads:
-            output.writestr(copy.copy(info), data)
+            entry = copy.copy(info)
+            output.writestr(entry, data)
+            # zipfile supplies Unix permissions when external_attr is zero.
+            # Attributes live in the central directory, written at close, so
+            # restore the source value on our copy before that record is saved.
+            entry.external_attr = info.external_attr
     return None
 
 

@@ -99,6 +99,38 @@ def test_first_edit_full_verified_receipt_and_untouched_parts(tmp_path: Path) ->
     assert not list(tmp_path.glob(".xlayer-*"))
 
 
+@pytest.mark.parametrize("creator", [0, 3])
+@pytest.mark.parametrize("compression", [zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED])
+def test_zero_external_attributes_preserved_during_edit(
+    tmp_path: Path, creator: int, compression: int
+) -> None:
+    source = workbook(tmp_path)
+    with zipfile.ZipFile(source) as original:
+        parts = [(info.filename, original.read(info)) for info in original.infolist()]
+    # ZIP external attributes may legitimately be zero. zipfile supplies Unix
+    # permissions during writing, so restore zero before its directory is saved.
+    with zipfile.ZipFile(source, "w") as archive:
+        for name, content in parts:
+            info = zipfile.ZipInfo(name)
+            info.create_system = creator
+            info.compress_type = compression
+            archive.writestr(info, content)
+            info.external_attr = 0
+    before = source.read_bytes()
+    output = tmp_path / "out.xlsx"
+    with Workbook.open(source) as book:
+        proposal, _, approval = prepared(book, output)
+        result = proposal.apply(approval=approval, verify_approval=host)
+        assert isinstance(result, Receipt), result
+    with zipfile.ZipFile(source) as old, zipfile.ZipFile(output) as new:
+        assert old.namelist() == new.namelist()
+        for prior, actual in zip(old.infolist(), new.infolist(), strict=True):
+            assert prior.external_attr == actual.external_attr == 0
+            assert prior.create_system == actual.create_system == creator
+            assert prior.compress_type == actual.compress_type == compression
+    assert source.read_bytes() == before
+
+
 @pytest.mark.parametrize("change", ["deleted", "changed", "replaced"])
 def test_stale_source_never_publishes(tmp_path: Path, change: str) -> None:
     source = workbook(tmp_path)

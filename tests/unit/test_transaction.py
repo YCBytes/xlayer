@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import stat
 import zipfile
+from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -63,6 +64,87 @@ def host(approval: Approval) -> VerifiedApproval:
         True,
         ("apply_set_value", "change_populated_text", "accept_partial_dependency_coverage"),
     )
+
+
+def test_batch_receipt_keeps_original_summary_and_caches(tmp_path: Path) -> None:
+    source = workbook(
+        tmp_path,
+        '<c r="A1"><v>1</v></c><c r="B1"><v>2</v></c>'
+        '<c r="C1"><f>A1+B1</f><v>3</v></c><c r="D1"><f>C1</f><v>3</v></c>',
+    )
+    before = source.read_bytes()
+    output = tmp_path / "out.xlsx"
+    with Workbook.open(source) as book:
+        proposal, preview, approval = prepared(
+            book, output, edits=[SetValue("Inputs", "A1", 10), SetValue("Inputs", "B1", 20)]
+        )
+        data = preview.to_dict()
+        summary = data.get("impact_summary")
+        assert isinstance(summary, dict), "preview must carry its retained impact summary"
+        assert summary["known_union_count"] == 2 and summary["known_transitive_union_count"] == 1
+        result = proposal.apply(approval=approval, verify_approval=host)
+        assert isinstance(result, Receipt)
+        receipt = result.to_dict()
+        assert receipt["impact_summary"] == summary
+        assert receipt["dependency_contract_version"] == "1.1"
+        assert receipt["transaction_contract_version"] == "1.2"
+    with zipfile.ZipFile(source) as old, zipfile.ZipFile(output) as new:
+        for name in old.namelist():
+            if name != "xl/worksheets/1.xml":
+                assert old.read(name) == new.read(name)
+        root = ET.fromstring(new.read("xl/worksheets/1.xml"))  # noqa: S314
+        for address in ("C1", "D1"):
+            node = root.find(f'.//{NS}c[@r="{address}"]/{NS}v')
+            assert node is not None and node.text == "3"
+    assert source.read_bytes() == before and not list(tmp_path.glob(".xlayer-*"))
+
+
+@pytest.mark.parametrize(
+    "drift", ["dependency_contract_version", "impact_summary_version", "summary"]
+)
+def test_changed_summary_or_contract_rejects_old_grant_and_accepts_fresh_one(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    drift: str,
+) -> None:
+    from xlayer import _proposal
+    from xlayer._batch_impact import BatchImpact
+    from xlayer._canonical import frozen_mapping
+    from xlayer._impact_summary import summarize_batch
+
+    source = workbook(tmp_path)
+    before = source.read_bytes()
+    output = tmp_path / "out.xlsx"
+    output.write_bytes(b"incumbent")
+    with Workbook.open(source) as book:
+        proposal, preview, approval = prepared(book, output, overwrite=True)
+        assert "impact_summary" in preview.evidence
+        if drift == "summary":
+            original = summarize_batch
+
+            def changed(
+                batch: BatchImpact, *, source_fingerprint: str, sheet_order: Mapping[str, int]
+            ) -> Mapping[str, object]:
+                data = dict(
+                    original(batch, source_fingerprint=source_fingerprint, sheet_order=sheet_order)
+                )
+                data["impact_summary_version"] = "test-next"
+                return frozen_mapping(data)
+
+            monkeypatch.setattr(_proposal, "summarize_batch", changed)
+        else:
+            monkeypatch.setattr(_proposal, "VERSIONS", {**_proposal.VERSIONS, drift: "test-next"})
+        rejected = proposal.apply(approval=approval, verify_approval=host)
+        assert isinstance(rejected, Refusal) and rejected.code == "preview_digest_mismatch"
+        assert output.read_bytes() == b"incumbent" and source.read_bytes() == before
+        assert not list(tmp_path.glob(".xlayer-*"))
+        fresh, new_preview, new_approval = prepared(book, output, overwrite=True)
+        stale = fresh.apply(approval=approval, verify_approval=host)
+        assert isinstance(stale, Refusal) and stale.code == "preview_digest_mismatch"
+        assert new_preview.preview_digest != preview.preview_digest
+        accepted = fresh.apply(approval=new_approval, verify_approval=host)
+        assert isinstance(accepted, Receipt)
+    assert source.read_bytes() == before
 
 
 def test_first_edit_full_verified_receipt_and_untouched_parts(tmp_path: Path) -> None:

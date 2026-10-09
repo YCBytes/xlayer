@@ -11,10 +11,17 @@ from xlayer import __version__
 from xlayer._approval import Approval, VerifiedApproval, refusal
 from xlayer._batch_impact import analyse_batch
 from xlayer._canonical import EvidenceTooLarge, digest, frozen_mapping
-from xlayer._dependencies import DEFAULT_IMPACT_LIMITS, CellRef, ImpactLimits, _to_json
+from xlayer._dependencies import (
+    DEFAULT_IMPACT_LIMITS,
+    DEPENDENCY_CONTRACT_VERSION,
+    CellRef,
+    ImpactLimits,
+    _to_json,
+)
 from xlayer._edit_validation import EditPlan, validate_edit, write_context
 from xlayer._edits import SetValue
 from xlayer._errors import ClosedWorkbookError, Refusal
+from xlayer._impact_summary import IMPACT_SUMMARY_VERSION, summarize_batch
 from xlayer._ooxml.zip_write import check_write_support
 from xlayer._output import OutputSpec, bind_output
 from xlayer._preview import Preview
@@ -25,7 +32,9 @@ if TYPE_CHECKING:
 
 VERSIONS = {
     "schema_version": "1.0",
-    "transaction_contract_version": "1.1",
+    "transaction_contract_version": "1.2",
+    "dependency_contract_version": DEPENDENCY_CONTRACT_VERSION,
+    "impact_summary_version": IMPACT_SUMMARY_VERSION,
     "package_version": __version__,
     "mutation_version": "1.1",
     "verification_version": "1.1",
@@ -228,6 +237,13 @@ class Proposal:
             "findings": findings,
             "blocked": bool(findings),
             "dependencies": analysis.to_dict() if analysis else None,
+            "impact_summary": summarize_batch(
+                analysis,
+                source_fingerprint=self._book.source_fingerprint,
+                sheet_order={sheet.name: sheet.tab_index for sheet in self._book.registry.sheets},
+            )
+            if analysis
+            else None,
             "limits": _to_json(self.limits),
             "thresholds": THRESHOLDS,
             "measurements": measured,

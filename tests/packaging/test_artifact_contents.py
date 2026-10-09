@@ -51,6 +51,7 @@ WHEEL_PAYLOAD = frozenset(
         "xlayer/_preview.py",
         "xlayer/_receipt.py",
         "xlayer/_batch_impact.py",
+        "xlayer/_impact_summary.py",
         "xlayer/_edit_validation.py",
         "xlayer/_proposal.py",
         "xlayer/_output.py",

@@ -119,6 +119,35 @@ def test_preview_exact_facts_and_approval_requirements(tmp_path: Path) -> None:
         assert not (tmp_path / "out.xlsx").exists()
 
 
+def test_preview_summary_and_contract_versions_are_bound(tmp_path: Path) -> None:
+    with Workbook.open(source(tmp_path)) as book:
+        proposal = propose(book, [SetValue("Inputs", "A1", 120)], tmp_path / "out.xlsx")
+        assert not isinstance(proposal, Refusal)
+        preview = proposal.preview()
+        assert not isinstance(preview, Refusal)
+        data = preview.to_dict()
+        assert data["transaction_contract_version"] == "1.2"
+        assert data["dependency_contract_version"] == "1.1"
+        assert data["impact_summary_version"] == "1.0"
+        assert proposal.identity()["dependency_contract_version"] == "1.1"
+        summary = data["impact_summary"]
+        assert (
+            isinstance(summary, dict) and summary["source_fingerprint"] == book.source_fingerprint
+        )
+        assert summary["known_union_count"] == 1
+
+
+def test_invalid_only_preview_has_no_analysis_not_complete_zero(tmp_path: Path) -> None:
+    with Workbook.open(source(tmp_path)) as book:
+        proposal = propose(book, [SetValue("Inputs", "C1", 0)], tmp_path / "out.xlsx")
+        assert not isinstance(proposal, Refusal)
+        preview = proposal.preview()
+        assert not isinstance(preview, Refusal)
+        data = preview.to_dict()
+        assert data["blocked"] and data["dependencies"] is None
+        assert "impact_summary" in data and data["impact_summary"] is None
+
+
 def test_invalid_second_member_blocks_whole_batch_and_retains_findings(tmp_path: Path) -> None:
     path = source(tmp_path)
     before = path.read_bytes()

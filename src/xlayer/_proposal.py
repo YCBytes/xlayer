@@ -15,6 +15,7 @@ from xlayer._dependencies import DEFAULT_IMPACT_LIMITS, CellRef, ImpactLimits, _
 from xlayer._edit_validation import EditPlan, validate_edit, write_context
 from xlayer._edits import SetValue
 from xlayer._errors import ClosedWorkbookError, Refusal
+from xlayer._ooxml.zip_write import check_write_support
 from xlayer._output import OutputSpec, bind_output
 from xlayer._preview import Preview
 from xlayer._receipt import Receipt
@@ -24,11 +25,11 @@ if TYPE_CHECKING:
 
 VERSIONS = {
     "schema_version": "1.0",
-    "transaction_contract_version": "1.0",
+    "transaction_contract_version": "1.1",
     "package_version": __version__,
-    "mutation_version": "1.0",
-    "verification_version": "1.0",
-    "policy_version": "1.0",
+    "mutation_version": "1.1",
+    "verification_version": "1.1",
+    "policy_version": "1.1",
 }
 THRESHOLDS = {"known_transitive_union_gt": 100, "known_affected_sheets_gt": 3, "batch_size_gte": 50}
 
@@ -140,6 +141,13 @@ class Proposal:
         effective = tuple(plan for plan in plans if plan.effective)
         if not effective and not findings:
             return refusal("no_changes", "all validated edits preserve their existing payloads")
+        if effective:
+            archive = self._book._archive
+            if archive is None:
+                raise RuntimeError("preview requires an open source archive")
+            write_failure = check_write_support(archive)
+            if write_failure is not None:
+                findings.append({"refusal": write_failure.to_dict()})
         required = {"apply_set_value"}
         if any(plan.populated_text for plan in effective):
             required.add("change_populated_text")

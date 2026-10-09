@@ -18,6 +18,8 @@ from xml.etree import ElementTree as ET
 from xlayer._approval import refusal
 from xlayer._edit_validation import EditPlan
 from xlayer._errors import Refusal, WorkbookOpenError
+from xlayer._ooxml.archive import WorkbookArchive
+from xlayer._ooxml.zip_write import inspect_write_layout
 
 if TYPE_CHECKING:
     from xlayer._workbook import Workbook
@@ -217,6 +219,61 @@ class VerificationReport:
         }
 
 
+def _zip_preservation(
+    original: WorkbookArchive, fresh: WorkbookArchive, part: str
+) -> Refusal | None:
+    before, after = inspect_write_layout(original), inspect_write_layout(fresh)
+    if isinstance(before, Refusal) or isinstance(after, Refusal):
+        return refusal("verification_failed", "ZIP framing failed independent output admission")
+    if [entry.info.filename for entry in sorted(before.entries, key=lambda entry: entry.start)] != [
+        entry.info.filename for entry in sorted(after.entries, key=lambda entry: entry.start)
+    ] or before.eocd[:12] + before.eocd[20:] != after.eocd[:12] + after.eocd[20:]:
+        return refusal("verification_failed", "ZIP physical order or end metadata changed")
+    old_stream, new_stream = original._zip.fp, fresh._zip.fp
+    if old_stream is None or new_stream is None:
+        raise RuntimeError("ZIP verification requires two open snapshots")
+    for old, new in zip(before.entries, after.entries, strict=True):
+        target = old.info.filename == part
+        # Only derived sizes/CRC for the target and every local offset may change.
+        old_central = (
+            old.central[:16] + old.central[28:42] + old.central[46:]
+            if target
+            else (old.central[:42] + old.central[46:])
+        )
+        new_central = (
+            new.central[:16] + new.central[28:42] + new.central[46:]
+            if target
+            else (new.central[:42] + new.central[46:])
+        )
+        if (
+            old_central != new_central
+            or (old.header[:14] + old.header[26:] != new.header[:14] + new.header[26:])
+            or len(old.descriptor) != len(new.descriptor)
+            or (old.descriptor[:-12] != new.descriptor[:-12])
+        ):
+            return refusal(
+                "verification_failed", "raw ZIP entry metadata changed", entry=old.info.filename
+            )
+        if target:
+            continue
+        if old.end - old.start != new.end - new.start:
+            return refusal("verification_failed", "untouched ZIP local record length changed")
+        old_stream.seek(old.start)
+        new_stream.seek(new.start)
+        remaining = old.end - old.start
+        while remaining:
+            length = min(remaining, 1024 * 1024)
+            old_bytes, new_bytes = old_stream.read(length), new_stream.read(length)
+            if len(old_bytes) != length or old_bytes != new_bytes:
+                return refusal(
+                    "verification_failed",
+                    "untouched ZIP local record changed",
+                    entry=old.info.filename,
+                )
+            remaining -= length
+    return None
+
+
 def verify_output(
     book: Workbook, path: Path, plans: Sequence[EditPlan], part: str
 ) -> VerificationReport | Refusal:
@@ -237,6 +294,9 @@ def verify_output(
         fresh = output._archive
         if fresh is None:
             raise RuntimeError("fresh output session lost its archive")
+        zip_failure = _zip_preservation(original, fresh, part)
+        if zip_failure is not None:
+            return zip_failure
         if (
             original.part_names() != fresh.part_names()
             or book.registry != output.registry
@@ -254,6 +314,7 @@ def verify_output(
             for attr in (
                 "date_time",
                 "compress_type",
+                "flag_bits",
                 "comment",
                 "extra",
                 "create_system",
@@ -366,6 +427,7 @@ def verify_output(
             (
                 "package_and_zip_integrity",
                 "inventory_and_metadata",
+                "zip_record_preservation",
                 "shared_infrastructure",
                 "all_supported_worksheets_reparsed",
                 "complete_target_ledger",

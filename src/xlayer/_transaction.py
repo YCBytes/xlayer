@@ -2,11 +2,8 @@
 
 from __future__ import annotations
 
-import copy
 import os as os
 import tempfile
-import zipfile
-import zlib
 from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, BinaryIO, cast
@@ -16,6 +13,7 @@ from xlayer._canonical import digest
 from xlayer._errors import Refusal
 from xlayer._ooxml.archive import WorkbookArchive
 from xlayer._ooxml.patch import patch_worksheet
+from xlayer._ooxml.zip_write import write_preserved_archive
 from xlayer._output import check_source
 from xlayer._preview import Preview
 from xlayer._receipt import Receipt
@@ -28,45 +26,7 @@ if TYPE_CHECKING:
 def write_archive(
     archive: WorkbookArchive, handle: BinaryIO, part: str, patched: bytes
 ) -> Refusal | None:
-    infos = archive._zip.infolist()
-    # These flags/extras would be rewritten or carry offsets/checksums whose
-    # preservation cannot be claimed. Reject instead of silently stripping.
-    if any(info.flag_bits & ~0x800 or info.extra or info.volume for info in infos):
-        return refusal("unsupported_zip_metadata", "ZIP metadata cannot be safely preserved")
-    payloads: list[tuple[zipfile.ZipInfo, bytes]] = []
-    for info in infos:
-        if info.is_dir():
-            if info.file_size or info.compress_type not in {
-                zipfile.ZIP_STORED,
-                zipfile.ZIP_DEFLATED,
-            }:
-                return refusal(
-                    "unsupported_zip_metadata", "directory entry carries unsupported payload"
-                )
-            try:
-                data = archive._zip.read(info)
-            except (zipfile.BadZipFile, zlib.error) as exc:
-                return refusal(
-                    "malformed_archive", "directory integrity check failed", error=str(exc)
-                )
-            if data:
-                return refusal("unsupported_zip_metadata", "directory entry carries opaque payload")
-        else:
-            content = archive.read_part(info.filename)
-            if isinstance(content, Refusal):
-                return content
-            data = patched if info.filename == part else content
-        payloads.append((info, data))
-    with zipfile.ZipFile(handle, "w", allowZip64=False) as output:
-        output.comment = archive._zip.comment
-        for info, data in payloads:
-            entry = copy.copy(info)
-            output.writestr(entry, data)
-            # zipfile supplies Unix permissions when external_attr is zero.
-            # Attributes live in the central directory, written at close, so
-            # restore the source value on our copy before that record is saved.
-            entry.external_attr = info.external_attr
-    return None
+    return write_preserved_archive(archive, handle, part, patched)
 
 
 def _identities(proposal: Proposal, preview: Preview) -> dict[str, object]:

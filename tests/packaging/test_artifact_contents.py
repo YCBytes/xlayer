@@ -66,6 +66,7 @@ WHEEL_PAYLOAD = frozenset(
         "xlayer/_ooxml/sheet.py",
         "xlayer/_ooxml/formula.py",
         "xlayer/_ooxml/patch.py",
+        "xlayer/_ooxml/zip_write.py",
     }
 )
 

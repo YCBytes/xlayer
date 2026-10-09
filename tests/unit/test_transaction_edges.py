@@ -5,6 +5,7 @@ from __future__ import annotations
 import zipfile
 from dataclasses import replace
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -214,8 +215,14 @@ def test_empty_directory_integrity_failures_are_structured(tmp_path: Path, fault
             entry.compress_type = 99
         result = proposal.apply(approval=approval, verify_approval=host)
         assert isinstance(result, Refusal)
-        assert result.code == (
-            "malformed_archive" if fault == "crc" else "unsupported_zip_metadata"
+        # Framing admission is now in preview: the injected mutation changes
+        # that evidence, so the older approval is rejected BEFORE writing.
+        assert result.code == "preview_digest_mismatch"
+        _, fresh, _ = prepared(book, tmp_path / "out.xlsx")
+        assert any(
+            f["refusal"]["code"]
+            == ("malformed_archive" if fault == "crc" else "unsupported_zip_metadata")
+            for f in cast("list[dict[str, dict[str, object]]]", fresh.to_dict()["findings"])
         )
         assert not book.closed
     assert not (tmp_path / "out.xlsx").exists() and not list(tmp_path.glob(".xlayer-*"))

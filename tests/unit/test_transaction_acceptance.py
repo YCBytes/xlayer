@@ -179,9 +179,19 @@ def test_opaque_part_corruption_is_detected_independently(
     def corrupt(
         archive: WorkbookArchive, handle: BinaryIO, part: str, patched: bytes
     ) -> Refusal | None:
-        archive._cache["custom/opaque.bin"] = b"changed"
         result = original(archive, handle, part, patched)
-        archive._cache["custom/opaque.bin"] = b"preserve these exact bytes"
+        # The preservation writer no longer writes opaque content from the
+        # decompressed cache. Inject actual staged-output corruption instead.
+        handle.seek(0)
+        with zipfile.ZipFile(handle) as output:
+            entries = [(info, output.read(info)) for info in output.infolist()]
+        handle.seek(0)
+        handle.truncate()
+        with zipfile.ZipFile(handle, "w") as output:
+            for info, content in entries:
+                output.writestr(
+                    info, b"changed" if info.filename == "custom/opaque.bin" else content
+                )
         return result
 
     with Workbook.open(path) as book:

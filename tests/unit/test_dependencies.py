@@ -58,7 +58,7 @@ def example() -> DependencyImpact:
     work = AnalysisWork(1, 1, 1, 0, 1, 2, 0, 1, 0, 2, 1)
     return DependencyImpact(
         "1.0",
-        "1.0",
+        "1.1",
         FINGERPRINT,
         root,
         "worksheet_cell_formulas",
@@ -286,15 +286,45 @@ def test_range_boundary_and_outside(tmp_path: Path, root: str, count: int) -> No
     assert result.known_direct_count == count
 
 
+def test_whole_column_missing_far_root_is_geometric_proof(tmp_path: Path) -> None:
+    result = analyze(tmp_path, grid('<c r="B1"><f>SUM(A:A)</f></c>'), root="A1048576")
+    assert result.analysis_status == "complete"
+    assert result.dependency_contract_version == "1.1"
+    assert result.direct_dependents == (CellRef("S", "B1"),)
+    assert result.work.scanned_cells == 1 and result.work.references_admitted == 1
+    assert result.work.membership_checks == 2
+    evidence = result.evidence_edges[0].evidence
+    assert evidence.normalized_reference == RangeRef("S", 1, 1, 1048576, 1)
+    assert evidence.basis == ("direct_ooxml", "range_membership")
+
+
+def test_shared_axis_members_and_fixed_names_keep_only_stored_formulas(tmp_path: Path) -> None:
+    result = analyze(
+        tmp_path,
+        '<sheetData><row r="1"><c r="B1"><f t="shared" si="0" ref="B1:C2">'
+        'SUM($C:D)</f></c></row><row r="2"><c r="C2"><f t="shared" si="0"/></c>'
+        '</row><row r="4"><c r="B4"><f>SUM(ScopedRange)</f></c></row></sheetData>',
+        root="D1048576",
+        names='<definedName name="ScopedRange">S!$C:$D</definedName>',
+    )
+    assert result.analysis_status == "complete"
+    assert result.direct_dependents == (CellRef("S", "B1"), CellRef("S", "C2"), CellRef("S", "B4"))
+    assert result.work.scanned_cells == 3 and result.work.formula_cells_attempted == 3
+    shared = next(e.evidence for e in result.evidence_edges if e.dependent.address == "C2")
+    assert shared.normalized_reference == RangeRef("S", 1, 3, 1048576, 5)
+    assert shared.shared_offset == (1, 1) and shared.source_span == (4, 8)
+    assert shared.basis == ("direct_ooxml", "shared_translation", "range_membership")
+
+
 @pytest.mark.parametrize(
     "bad",
     [
         'INDIRECT("A1")',
         "A1+OFFSET(B1,1,1)",
-        "INDEX(A1,1)",
+        "SUM(A1:INDEX(A1:A9,2))",
         "Missing!A1",
         "#REF!",
-        "A:A",
+        "INDEX((A:A,C:C),1,1,2)",
         "A1 B1",
         "Table[Col]",
         "_xlfn.SUM(A1)",
@@ -833,7 +863,7 @@ def test_later_name_failure_preserves_earlier_definition_work(tmp_path: Path) ->
 
 
 @pytest.mark.parametrize(
-    "formula,depth", [("(((A1+INDEX(A1,1))))", 3), ("((A1+", 2), ("((A1))?", 2)]
+    "formula,depth", [("(((A1+TABLE(A1,1))))", 3), ("((A1+", 2), ("((A1))?", 2)]
 )
 def test_rejected_expression_preserves_observed_nesting(
     tmp_path: Path, formula: str, depth: int

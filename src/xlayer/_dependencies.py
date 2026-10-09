@@ -35,6 +35,7 @@ from xlayer._ooxml.workbook import SheetEntry, WorkbookRegistry
 JsonValue: TypeAlias = (
     bool | int | float | str | Sequence["JsonValue"] | Mapping[str, "JsonValue"] | None
 )
+DEPENDENCY_CONTRACT_VERSION: Literal["1.1"] = "1.1"
 _T = TypeVar("_T")
 _INT_MIN, _INT_MAX = -(2**63), 2**63 - 1
 _QUERY = re.compile(r"[A-Za-z]{1,3}[1-9][0-9]{0,6}\Z")
@@ -392,7 +393,7 @@ class AnalysisWork:
 @dataclass(frozen=True)
 class DependencyImpact:
     schema_version: Literal["1.0"]
-    dependency_contract_version: Literal["1.0"]
+    dependency_contract_version: Literal["1.1"]
     source_fingerprint: str
     root: CellRef
     scope: Literal["worksheet_cell_formulas"]
@@ -416,7 +417,8 @@ class DependencyImpact:
     def __post_init__(self) -> None:
         if (
             _string(self.schema_version, "schema_version") != "1.0"
-            or _string(self.dependency_contract_version, "dependency_contract_version") != "1.0"
+            or _string(self.dependency_contract_version, "dependency_contract_version")
+            != DEPENDENCY_CONTRACT_VERSION
         ):
             raise ValueError("unsupported dependency schema/contract version")
         if _FINGERPRINT.fullmatch(_string(self.source_fingerprint, "source_fingerprint")) is None:
@@ -1173,7 +1175,12 @@ def _traverse(
                         candidate.formula_cell.sheet,
                         candidate.formula_cell,
                         candidate.source_span,
-                        {"budget": budget, "consumed": consumed, "limit": getattr(limits, budget)},
+                        {
+                            "root": _to_json(root),
+                            "budget": budget,
+                            "consumed": consumed,
+                            "limit": getattr(limits, budget),
+                        },
                         recovery=_BUDGET_RECOVERY,
                     )
                 )
@@ -1286,7 +1293,7 @@ def _unknown_impact(
 ) -> DependencyImpact:
     return DependencyImpact(
         "1.0",
-        "1.0",
+        DEPENDENCY_CONTRACT_VERSION,
         source_fingerprint,
         root,
         "worksheet_cell_formulas",
@@ -1397,7 +1404,7 @@ def _impact_from_index(
     cycles = _observed_cycles(tuple(traversed.depths), edges, index.sheet_order)
     return DependencyImpact(
         "1.0",
-        "1.0",
+        DEPENDENCY_CONTRACT_VERSION,
         source_fingerprint,
         root,
         "worksheet_cell_formulas",

@@ -137,14 +137,14 @@ def test_entire_expression_is_required(text: str) -> None:
     [
         ('A1+INDIRECT("B1")', "dynamic_reference_function"),
         ("OFFSET(A1,1,1)", "dynamic_reference_function"),
-        ("INDEX(A1,1)", "unsupported_function"),
+        ("TABLE(A1)", "unsupported_function"),
         ("_xlfn.SUM(A1)", "unsupported_function"),
         ("LET(x,A1,x)", "unsupported_function"),
         ("LAMBDA(x,x)", "unsupported_function"),
         ("A1 B1", "union_or_intersection_reference"),
         ("(A1,B1)", "union_or_intersection_reference"),
-        ("A:A", "whole_row_or_column_reference"),
-        ("1:2", "whole_row_or_column_reference"),
+        ("SUM(B2:INDEX(A2:C6,5,2))", "formula_parse_failure"),
+        ("INDEX((A1,C1),1)", "union_or_intersection_reference"),
         ("S1:S2!A1", "three_dimensional_reference"),
         ("'S1:S2'!A1", "three_dimensional_reference"),
         ("[1]S!A1", "external_workbook_reference"),
@@ -339,3 +339,131 @@ def test_shared_bounds_and_fixed_name_behavior() -> None:
 def test_missing_or_nonworksheet_target_is_unresolved(text: str) -> None:
     result = resolve(text)
     assert isinstance(result, FormulaProblem) and result.code == "unresolved_sheet_reference"
+
+
+@pytest.mark.parametrize("function", ["LEFT", "STDEV", "COVAR", "MEDIAN", "CHOOSE", "INDEX"])
+def test_admitted_calls_track_all_static_arguments_not_selected_values(function: str) -> None:
+    text = f'{function.lower()}(A1,,SUM(B2,A1),"C3")'
+    refs = parse(text).references
+    start = len(function) + 1
+    assert [text[slice(*r.source_span)] for r in refs] == ["A1", "B2", "A1"]
+    assert [r.source_span for r in refs] == [
+        (start, start + 2),
+        (start + 8, start + 10),
+        (start + 11, start + 13),
+    ]
+    assert [r.occurrence_index for r in refs] == [0, 1, 2]
+    assert parse(f"{function}()").references == ()
+    assert isinstance(
+        parse_formula(f'{function}(A1,INDIRECT("B1"))', max_chars=8192, max_nesting=64),
+        FormulaProblem,
+    )
+
+
+@pytest.mark.parametrize("text", ["CHOOSE(B1,C1,D1)", "INDEX(C1:C9,B1)", "SUM(INDEX(A1:A9,2))"])
+def test_reference_returning_functions_admit_argument_references_only(text: str) -> None:
+    parse(text)
+
+
+@pytest.mark.parametrize(
+    "text", ["SUM(B2:CHOOSE(1,A1,A2))", "INDEX(A1,1):B9", "INDEX((A:A,C:C),1,1,2)"]
+)
+def test_computed_endpoints_and_unions_never_invent_rectangles(text: str) -> None:
+    assert isinstance(parse_formula(text, max_chars=8192, max_nesting=64), FormulaProblem)
+
+
+@pytest.mark.parametrize(
+    "text", ["TABLE(A1)", "_xlfn.RRI(A1)", "_xlfn.INDEX(A1)", "STDEVP(A1)", "COVARIANCE.P(A1)"]
+)
+def test_function_amendment_does_not_admit_families_or_future_prefixes(text: str) -> None:
+    problem(text, "unsupported_function")
+
+
+@pytest.mark.parametrize(
+    "text,row,col,bounds",
+    [
+        ("SUM($C:D)", 50, 2, (1, 3, 1048576, 6)),
+        ("SUM(9:$4)", -3, 80, (4, 1, 6, 16384)),
+        ("SUM(D:$C)", 10, -1, (1, 3, 1048576, 3)),
+        ("SUM($XFD:$XFD)", -100, 100, (1, 16384, 1048576, 16384)),
+        ("SUM($1048576:$1048576)", 100, -100, (1048576, 1, 1048576, 16384)),
+        ("SUM(T!d : b)", 0, 0, (1, 2, 1048576, 4)),
+        ("SUM('O''Brien'!$4:$9)", 100, 0, (4, 1, 9, 16384)),
+        ("SUM(A:A)", 0, 0, (1, 1, 1048576, 1)),
+        ("SUM(1:2)", 0, 0, (1, 1, 2, 16384)),
+    ],
+)
+def test_whole_axes_translate_explicit_locks_before_normalization(
+    text: str, row: int, col: int, bounds: tuple[int, int, int, int]
+) -> None:
+    result = resolve(text, row=row, col=col)
+    assert isinstance(result, tuple)
+    ref = result[0]
+    assert (ref.min_row, ref.min_column, ref.max_row, ref.max_column) == bounds
+    assert ref.token.kind == "range"
+
+
+def test_axis_spans_occurrences_and_numeric_leading_qualifiers_are_exact() -> None:
+    text = "SUM(2024!$C:$D,2024!$C:$D)"
+    refs = parse(text).references
+    assert [r.qualifier for r in refs] == ["2024", "2024"]
+    assert [r.source_span for r in refs] == [(4, 14), (15, 25)]
+    assert [r.occurrence_index for r in refs] == [0, 1]
+    assert parse("1e3+1.5").references == ()
+    assert parse("Columns").references[0].kind == "defined_name"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "0:1",
+        "01:2",
+        "1:1048577",
+        "XFE:XFE",
+        "\u0661:2",
+        "A:1",
+        "1:A",
+        "A1:A",
+        "A:A1",
+        "$A$$:B",
+        "A:",
+        ":B",
+        "A:B:C",
+        "A:A!B",
+        "1.5:2",
+        "1e3:4",
+        "1" * 5000 + ":2",
+    ],
+)
+def test_invalid_axis_shapes_bounds_and_ascii_digits_are_refused(text: str) -> None:
+    assert isinstance(parse_formula(text, max_chars=8192, max_nesting=64), FormulaProblem)
+
+
+@pytest.mark.parametrize(
+    "text,row,col", [("A:A", 0, -1), ("XFD:XFD", 0, 1), ("1:2", -1, 0), ("1048576:1048576", 1, 0)]
+)
+def test_shared_axis_overflow_is_not_clipped(text: str, row: int, col: int) -> None:
+    result = resolve(text, row=row, col=col)
+    assert isinstance(result, FormulaProblem) and result.code == "shared_reference_out_of_bounds"
+
+
+@pytest.mark.parametrize(
+    "definition,bounds", [("T!$C:$D", (1, 3, 1048576, 4)), ("T!$4:$9", (4, 1, 9, 16384))]
+)
+def test_fixed_absolute_axis_names_ignore_shared_offsets(
+    definition: str, bounds: tuple[int, int, int, int]
+) -> None:
+    result = resolve(
+        "ScopedRange", (DefinedName("ScopedRange", definition, "S", False),), row=50, col=50
+    )
+    assert isinstance(result, tuple) and result[0].sheet == "T"
+    ref = result[0]
+    assert (ref.min_row, ref.min_column, ref.max_row, ref.max_column) == bounds
+
+
+@pytest.mark.parametrize(
+    "definition", ["T!C:D", "T!$C:D", "$C:$D", "T!4:9", "T!$4:9", "SUM(T!$C:$D)", "T!$C:$D,T!$F:$F"]
+)
+def test_relative_unqualified_and_computed_axis_names_stay_unsupported(definition: str) -> None:
+    result = resolve("ScopedRange", (DefinedName("ScopedRange", definition, None, False),))
+    assert isinstance(result, FormulaProblem) and result.code == "unsupported_name_definition"

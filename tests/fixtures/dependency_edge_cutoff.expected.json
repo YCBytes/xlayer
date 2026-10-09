@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "dependency_contract_version": "1.0",
+  "dependency_contract_version": "1.1",
   "source_fingerprint": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
   "root": {"sheet": "S", "address": "A1"},
   "scope": "worksheet_cell_formulas",
@@ -27,7 +27,7 @@
   "issues": [{
     "code": "traversal_budget_exceeded", "sheet": "S",
     "formula_cell": {"sheet": "S", "address": "C1"}, "source_span": [0, 2],
-    "details": {"budget": "max_evidence_edges", "consumed": 1, "limit": 1},
+    "details": {"root": {"sheet": "S", "address": "A1"}, "budget": "max_evidence_edges", "consumed": 1, "limit": 1},
     "recovery_options": [{"action": "review_outside_bounded_analyzer"}]
   }],
   "inventory_frontier": [],

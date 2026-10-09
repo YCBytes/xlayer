@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "dependency_contract_version": "1.0",
+  "dependency_contract_version": "1.1",
   "source_fingerprint": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
   "root": {"sheet": "S", "address": "A1"},
   "scope": "worksheet_cell_formulas",

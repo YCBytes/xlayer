@@ -7,7 +7,7 @@
      "master": ["formulas", "B8"], "formula_text": "E8*F8", "span": [0, 2]},
     {"sheet": "ref_data", "address": "A2",
      "direct": [["ref_data", "A12"], ["formulas", "B4"], ["formulas", "B6"],
-       ["formulas", "B13"], ["formulas", "B15"], ["formulas", "B17"],
+       ["formulas", "B13"], ["formulas", "B15"], ["formulas", "B16"], ["formulas", "B17"],
        ["cross_sheet_refs", "B4"], ["cross_sheet_refs", "B5"],
        ["cross_sheet_refs", "B6"], ["cross_sheet_refs", "B9"], ["cross_sheet_refs", "B10"]],
      "transitive": [["cross_sheet_refs", "B8"]]},
@@ -25,6 +25,6 @@
     "dependent_row": 11, "master": ["merged_cells", "B11"],
     "formula_text": "SUM(B4:B9)", "span": [4, 9], "normalized_rows": [4, 9]
   },
-  "required_issue_sites": [["formulas", "B16"], ["formulas", "B18"],
+  "required_issue_sites": [["formulas", "B18"],
     ["formulas", "B19"], ["formulas", "B20"], ["formulas", "B23"]]
 }

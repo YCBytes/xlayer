@@ -921,8 +921,10 @@ SUPPORTED_FUNCTIONS = frozenset(
         "ABS",
         "AND",
         "AVERAGE",
+        "CHOOSE",
         "COUNT",
         "COUNTA",
+        "COVAR",
         "DATE",
         "DAY",
         "FALSE",
@@ -930,9 +932,12 @@ SUPPORTED_FUNCTIONS = frozenset(
         "HOUR",
         "IF",
         "IFERROR",
+        "INDEX",
         "INT",
+        "LEFT",
         "MATCH",
         "MAX",
+        "MEDIAN",
         "MIN",
         "MINUTE",
         "MOD",
@@ -946,6 +951,7 @@ SUPPORTED_FUNCTIONS = frozenset(
         "ROUNDUP",
         "SECOND",
         "SQRT",
+        "STDEV",
         "SUM",
         "TEXT",
         "TIME",
@@ -958,6 +964,8 @@ _SPACE = " \t\r\n"
 _NUMBER = re.compile(r"(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?")
 _CELL = re.compile(r"(\$?)([A-Za-z]{1,3})(\$?)([1-9][0-9]{0,6})\Z")
 _CELL_LIKE = re.compile(r"\$?[A-Za-z]+\$?[0-9]+\Z")
+_AXIS_COLUMN = re.compile(r"(\$?)([A-Za-z]{1,3})\Z")
+_AXIS_ROW = re.compile(r"(\$?)([1-9][0-9]{0,6})\Z")
 _ERRORS = (
     "#GETTING_DATA",
     "#DIV/0!",
@@ -981,13 +989,20 @@ class Endpoint:
 
 
 @dataclass(frozen=True)
+class AxisEndpoint:
+    axis: Literal["row", "column"]
+    index: int
+    absolute: bool
+
+
+@dataclass(frozen=True)
 class ReferenceToken:
     kind: ReferenceKind
     source_span: tuple[int, int]
     occurrence_index: int
     qualifier: str | None
-    first: Endpoint | None
-    last: Endpoint | None
+    first: Endpoint | AxisEndpoint | None
+    last: Endpoint | AxisEndpoint | None
     name: str | None
 
 
@@ -1021,6 +1036,21 @@ def _endpoint(text: str) -> Endpoint | None:
     if row > 1_048_576 or col > 16_384:
         return None
     return Endpoint(row, col, bool(match[3]), bool(match[1]))
+
+
+def _axis_endpoint(text: str) -> AxisEndpoint | None:
+    """Called only at a range site; bare axis-like words remain names/literals."""
+    column = _AXIS_COLUMN.fullmatch(text)
+    if column is not None:
+        index = 0
+        for char in column[2].upper():
+            index = index * 26 + ord(char) - ord("A") + 1
+        return AxisEndpoint("column", index, bool(column[1])) if index <= 16384 else None
+    row = _AXIS_ROW.fullmatch(text)
+    if row is not None:
+        index = int(row[2])  # bounded ASCII length before conversion
+        return AxisEndpoint("row", index, bool(row[1])) if index <= 1048576 else None
+    return None
 
 
 def _word_end(text: str, start: int) -> int:
@@ -1101,11 +1131,9 @@ def _read_operand(
         match = _NUMBER.match(text, start)
         if match is not None:
             end = match.end()
-            if _skip_space(text, end) < len(text) and text[_skip_space(text, end)] == ":":
-                return _problem(
-                    "whole_row_or_column_reference", start, end + 1, "whole row reference"
-                )
-            return end, None, False
+            after_number = _skip_space(text, end)
+            if after_number == len(text) or text[after_number] != ":":
+                return end, None, False
 
     qualifier: str | None = None
     position = start
@@ -1174,9 +1202,16 @@ def _read_operand(
         second_word = text[next_start:next_end]
         last = _endpoint(second_word)
         if first is None or last is None:
-            whole_col = all(c.isascii() and (c.isalpha() or c == "$") for c in word + second_word)
-            code = "whole_row_or_column_reference" if whole_col else "formula_parse_failure"
-            return _problem(code, start, next_end, "invalid/unsupported range endpoints")
+            first_axis, last_axis = _axis_endpoint(word), _axis_endpoint(second_word)
+            if first_axis is None or last_axis is None or first_axis.axis != last_axis.axis:
+                return _problem("formula_parse_failure", start, next_end, "invalid range endpoints")
+            return (
+                next_end,
+                ReferenceToken(
+                    "range", (start, next_end), occurrence, qualifier, first_axis, last_axis, None
+                ),
+                False,
+            )
         return (
             next_end,
             ReferenceToken("range", (start, next_end), occurrence, qualifier, first, last, None),
@@ -1394,6 +1429,24 @@ def _resolve_bounds(
         )
     if token.first is None or token.last is None:
         return FormulaProblem("formula_parse_failure", token.source_span, "missing endpoints")
+    if isinstance(token.first, AxisEndpoint) and isinstance(token.last, AxisEndpoint):
+        first, last = token.first, token.last
+        if first.axis != last.axis:
+            return FormulaProblem("formula_parse_failure", token.source_span, "mixed range axes")
+        offset = row_offset if first.axis == "row" else column_offset
+        limit = 1048576 if first.axis == "row" else 16384
+        indices = tuple(e.index + (0 if e.absolute else offset) for e in (first, last))
+        if not all(1 <= index <= limit for index in indices):
+            return FormulaProblem(
+                "shared_reference_out_of_bounds",
+                token.source_span,
+                "translated reference leaves worksheet grid",
+            )
+        low, high = min(indices), max(indices)
+        bounds = (low, 1, high, 16384) if first.axis == "row" else (1, low, 1048576, high)
+        return ResolvedReference(token, sheet.name, *bounds, definition)
+    if not isinstance(token.first, Endpoint) or not isinstance(token.last, Endpoint):
+        return FormulaProblem("formula_parse_failure", token.source_span, "mixed endpoint shapes")
     coordinates: list[tuple[int, int]] = []
     for endpoint in (token.first, token.last):
         row = endpoint.row + (0 if endpoint.row_absolute else row_offset)
@@ -1415,6 +1468,12 @@ def _resolve_bounds(
         max(col1, col2),
         definition,
     )
+
+
+def _absolute_endpoint(endpoint: Endpoint | AxisEndpoint | None) -> bool:
+    if isinstance(endpoint, AxisEndpoint):
+        return endpoint.absolute
+    return isinstance(endpoint, Endpoint) and endpoint.row_absolute and endpoint.column_absolute
 
 
 def _resolve_name(
@@ -1487,12 +1546,8 @@ def _resolve_name(
     before, after = fixed.source_span
     if (
         fixed.qualifier is None
-        or fixed.first is None
-        or fixed.last is None
-        or not fixed.first.row_absolute
-        or not fixed.first.column_absolute
-        or not fixed.last.row_absolute
-        or not fixed.last.column_absolute
+        or not _absolute_endpoint(fixed.first)
+        or not _absolute_endpoint(fixed.last)
         or definition.text[:before].strip(_SPACE)
         or definition.text[after:].strip(_SPACE)
     ):

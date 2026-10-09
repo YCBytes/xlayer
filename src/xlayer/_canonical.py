@@ -15,30 +15,38 @@ MAX_EVIDENCE_BYTES = 16 * 1024 * 1024
 _DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
 
 
+class CanonicalTypeError(TypeError):
+    """Deliberate domain validation, distinct from caller-container failures."""
+
+
+class CanonicalValueError(ValueError):
+    """Deliberate domain validation, distinct from caller-container failures."""
+
+
 class EvidenceTooLarge(ValueError):  # noqa: N818 - named bound signal at the private boundary
     """Canonical evidence cannot fit the transaction's declared byte ceiling."""
 
 
 def string(value: object, name: str, *, nonempty: bool = False) -> str:
     if type(value) is not str:
-        raise TypeError(f"{name} must be an exact str")
+        raise CanonicalTypeError(f"{name} must be an exact str")
     text = value
     if (nonempty and not text) or any(0xD800 <= ord(c) <= 0xDFFF for c in text):
-        raise ValueError(f"{name} must contain valid Unicode scalar text")
+        raise CanonicalValueError(f"{name} must contain valid Unicode scalar text")
     return text
 
 
 def fingerprint(value: object) -> str:
     text = string(value, "fingerprint")
     if _DIGEST.fullmatch(text) is None:
-        raise ValueError("invalid SHA-256 fingerprint")
+        raise CanonicalValueError("invalid SHA-256 fingerprint")
     return text
 
 
 def freeze_json(value: object, *, _depth: int = 0, _parents: set[int] | None = None) -> object:
     """Validate without coercion; preserve shared acyclic inputs and reject cycles."""
     if _depth > 64:
-        raise ValueError("JSON nesting exceeds 64")
+        raise CanonicalValueError("JSON nesting exceeds 64")
     if value is None or type(value) is bool:
         return value
     if type(value) is str:
@@ -46,18 +54,18 @@ def freeze_json(value: object, *, _depth: int = 0, _parents: set[int] | None = N
     if type(value) is int:
         number = value
         if not -(2**63) <= number < 2**63:
-            raise ValueError("JSON integer outside signed 64-bit range")
+            raise CanonicalValueError("JSON integer outside signed 64-bit range")
         return number
     if type(value) is float:
         if not math.isfinite(value):
-            raise ValueError("JSON float must be finite")
+            raise CanonicalValueError("JSON float must be finite")
         return value
     if not isinstance(value, (Mapping, Sequence)) or isinstance(value, (str, bytes, bytearray)):
-        raise TypeError("value outside the transaction JSON domain")
+        raise CanonicalTypeError("value outside the transaction JSON domain")
     parents = set() if _parents is None else _parents
     identity = id(value)
     if identity in parents:
-        raise ValueError("cyclic JSON container")
+        raise CanonicalValueError("cyclic JSON container")
     parents.add(identity)
     try:
         if isinstance(value, Mapping):
@@ -65,7 +73,7 @@ def freeze_json(value: object, *, _depth: int = 0, _parents: set[int] | None = N
             for key, item in value.items():
                 key = string(key, "JSON key")
                 if key in result:
-                    raise ValueError("duplicate JSON key")
+                    raise CanonicalValueError("duplicate JSON key")
                 result[key] = freeze_json(item, _depth=_depth + 1, _parents=parents)
             return MappingProxyType(result)
         return tuple(freeze_json(item, _depth=_depth + 1, _parents=parents) for item in value)
@@ -83,7 +91,7 @@ def thaw_json(value: object) -> object:
 
 def frozen_mapping(value: Mapping[str, object]) -> Mapping[str, object]:
     if not isinstance(value, Mapping):
-        raise TypeError("a mapping is required")
+        raise CanonicalTypeError("a mapping is required")
     return cast("Mapping[str, object]", freeze_json(value))
 
 

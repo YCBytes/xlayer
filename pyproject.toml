@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "xlayer"
-version = "0.1.0.dev0"
-description = "Pre-release scaffolding for a Python transaction layer for .xlsx workbook changes. Internal infrastructure only; no supported workbook API yet."
+version = "0.1.0a1"
+description = "Experimental .xlsx transaction layer with bounded inspection, exact-preview approval, and verified scalar edits."
 readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"
@@ -13,7 +13,7 @@ license-files = ["LICENSE"]
 authors = [{ name = "YCBytes" }]
 keywords = ["xlsx", "ooxml", "spreadsheet", "excel"]
 classifiers = [
-  "Development Status :: 1 - Planning",
+  "Development Status :: 3 - Alpha",
   "Intended Audience :: Developers",
   "Operating System :: OS Independent",
   "Programming Language :: Python :: 3",
@@ -40,14 +40,18 @@ Source = "https://github.com/YCBytes/xlayer"
 packages = ["src/xlayer"]
 
 [tool.hatch.build.targets.sdist]
-# Enumerated rather than globbed. Agent-facing design notes live outside this
-# repository entirely; user-facing project docs are a later, separate decision
-# and must be added here deliberately before they ship.
+# Enumerated rather than globbed. Only reviewed public docs/examples ship;
+# working design/evaluation material stays outside this repository.
 only-include = [
   "src",
   "tests",
   "LICENSE",
   "README.md",
+  "CONTRIBUTING.md",
+  "CHANGELOG.md",
+  "docs/api.md",
+  "docs/support.md",
+  "examples/approved_set_value.py",
   "pyproject.toml",
 ]
 
@@ -86,7 +90,7 @@ warn_unreachable = true
 warn_unused_configs = true
 disallow_any_unimported = true
 enable_error_code = ["ignore-without-code", "redundant-expr", "truthy-bool"]
-files = ["src", "tests"]
+files = ["src", "tests", "examples"]
 
 [tool.pytest.ini_options]
 minversion = "8.0"

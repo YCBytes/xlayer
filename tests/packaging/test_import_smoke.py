@@ -1,12 +1,8 @@
-"""Packaging gates for the pre-release skeleton.
-
-These prove the distribution imports in a clean environment, declares no
-runtime dependency on the ``xlayer-core`` research repository, and claims no
-workbook capability.
-"""
+"""Exact supported root imports, installed typing, and zero runtime dependencies."""
 
 from __future__ import annotations
 
+import importlib
 import importlib.metadata
 import importlib.util
 from pathlib import Path
@@ -15,7 +11,8 @@ import xlayer
 
 
 def test_package_imports_and_reports_version() -> None:
-    assert xlayer.__version__ == "0.1.0.dev0"
+    assert xlayer.__version__ == "0.1.0a1"
+    assert importlib.metadata.version("xlayer") == xlayer.__version__
 
 
 def test_declares_no_runtime_dependencies() -> None:
@@ -28,13 +25,29 @@ def test_xlayer_core_is_not_importable() -> None:
     assert importlib.util.find_spec("xlayer_core") is None
 
 
-def test_no_workbook_capability_is_exported() -> None:
-    # Full-strength gate: every internal module is underscore-prefixed
-    # (_errors, _ooxml), so even Python's submodule binding cannot place a
-    # public name on the package before the slice ships.
-    assert xlayer.__all__ == ["__version__"]
-    public = [name for name in vars(xlayer) if not name.startswith("_")]
-    assert public == []
+def test_exact_alpha_surface_after_internal_imports() -> None:
+    expected = {
+        "Workbook",
+        "SetValue",
+        "Proposal",
+        "Inspection",
+        "Preview",
+        "Receipt",
+        "Approval",
+        "VerifiedApproval",
+        "Refusal",
+        "XlayerError",
+        "WorkbookOpenError",
+        "ClosedWorkbookError",
+        "ArchiveLimits",
+        "ImpactLimits",
+        "ReadLimits",
+    }
+    for name in ("_workbook", "_proposal", "_ooxml.archive", "_ooxml.sheet", "_dependencies"):
+        importlib.import_module(f"xlayer.{name}")
+    assert set(xlayer.__all__) == {"__version__", *expected}
+    assert len(xlayer.__all__) == len(expected) + 1
+    assert {name for name in vars(xlayer) if not name.startswith("_")} == expected
 
 
 def test_distribution_is_typed() -> None:

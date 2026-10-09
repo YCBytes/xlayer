@@ -1,116 +1,93 @@
 # xlayer
 
-An open-source Python transaction layer for safe, auditable changes to `.xlsx`
-workbooks.
+An experimental Python transaction layer for controlled changes to `.xlsx`
+workbooks. Inspect stored facts, preview a change, require exact-preview approval,
+verify the produced file, and receive a receipt. Xlayer runs offline with no
+runtime dependencies or AI provider built in.
 
-> **Status: pre-release. No supported workbook API exists yet.**
-> Internal parsing infrastructure is under construction as private modules, but
-> nothing is exposed: installing this package gives you a version number and no
-> supported way to read, inspect, or modify a workbook. It is published in this
-> state so that packaging, typing, and release gates can be reviewed while
-> capability is promoted one tested slice at a time. Everything under
-> "Intended design" below is a target, not current behaviour.
+**Status: public alpha `0.1.0a1`.** This is not a stable release or production
+certification. Building this version does not publish it to PyPI.
 
-## The problem
+## What works
 
-Most Python spreadsheet libraries expose mutation primitives and leave the caller
-to decide what is safe. That is the right trade-off for a deterministic script
-written by someone who already knows the workbook.
+- Bounded sheet inventory, explicit cell reads and potential-reference impact
+  summaries with coverage limitations intact.
+- `SetValue` for existing supported inputs: exact Python `int`, finite `float`,
+  `bool` or `str`, in one worksheet per transaction.
+- Application-owned approval bound to the exact source, proposal and preview.
+- Whole-batch editing to an explicit separate output, staged verification and
+  returned evidence. No automatic safe-subset fallback.
 
-It becomes risky when the caller is a general application or an AI system working
-on an unfamiliar file, where a half-applied change, a silently overwritten
-formula, or a stale cached value is unacceptable. The missing piece is not file
-access — it is a trustworthy change protocol.
+Formula results are saved caches, never verified calculations. Xlayer does not
+render workbooks or establish business correctness. Date writes, formula writes,
+missing-cell creation, structural editing and live Excel control are unsupported.
+Excel is the selected host; other spreadsheet hosts are not certified.
 
-## Intended design
+## Install
 
-xlayer is intended to wrap a workbook change in a controlled lifecycle:
-
-```text
-understand -> propose -> preview -> approve or refuse
-           -> apply the complete batch atomically -> verify -> receipt
-```
-
-The design commitments that lifecycle exists to serve, none of which are
-implemented yet:
-
-- **Whole-batch atomicity.** A proposal applies completely or writes nothing.
-  There is no automatic "apply the safe subset", because that produces a
-  partially edited workbook while reporting that the plan failed.
-- **Determinism.** The same workbook bytes and the same proposal produce the same
-  parse, preview, and mutation decisions. No AI calls sit inside parsing or
-  mutation.
-- **Structured refusals.** Unsupported or ambiguous cases return machine-readable
-  refusals carrying recovery information, rather than best-effort guesses or
-  exception strings a caller has to parse.
-- **Honest status reporting.** When a change leaves formulas needing a
-  spreadsheet host to recalculate, the result says so. Verification never implies
-  that formula results were recomputed when nothing recomputed them.
-- **Source preservation.** Writes go to an explicit output path. The input
-  workbook is left unchanged.
-- **Structural, not domain, semantics.** xlayer can derive structural facts such
-  as regions, dependencies, and header-like cells. It does not claim to know that
-  a cell is a covenant, a tax rule, or a correct business assumption.
-- **No provider dependency.** The base install requires no AI SDK and works
-  entirely offline.
-
-Capabilities are promoted into this package from a separate research repository
-one tested vertical slice at a time, each arriving with its own tests, refusal
-boundaries, and fidelity evidence. Nothing is described here as supported until
-it has passed those gates.
-
-## What you get today
+Requires Python 3.11 or newer. From a checkout of this repository:
 
 ```bash
-pip install xlayer
+python -m pip install .
 ```
+
+Or build a wheel with `python -m build` and install that local wheel. Use an
+isolated environment for evaluation. See [Contributing](CONTRIBUTING.md).
+
+## Inspect, then propose
 
 ```python
-import xlayer
+from xlayer import Refusal, SetValue, Workbook
 
-xlayer.__version__  # "0.1.0.dev0"
+with Workbook.open("inputs.xlsx") as book:
+    observation = book.read_cells("Inputs", ["C12", "D12"])
+    if isinstance(observation, Refusal):
+        print(observation.to_dict())
+    else:
+        print(observation.to_dict())  # saved formula results are unverified
+        proposal = book.propose([SetValue("Inputs", "C12", 120)], output_path="updated.xlsx")
+        if isinstance(proposal, Refusal):
+            print(proposal.to_dict())
+        else:
+            print(proposal.preview().to_dict())  # preview creates no output
 ```
 
-There is no public API beyond that version string, and a test in this repository
-enforces it. Internal parsing infrastructure is being built inside the package
-as private modules, but none of it is exposed or supported yet.
+Opening can raise `WorkbookOpenError` carrying a structured `.refusal`. This
+example stops before approval; it does not modify a workbook. The application
+decides what is permitted, authenticates an `Approval` through its required
+verifier, and handles the returned receipt/refusal. A model's claim is not authority.
 
-## Scope boundaries
+See [the tested approval-store example](examples/approved_set_value.py) for the
+complete provider-free flow. From a checkout with Xlayer installed, using the
+included disposable fixture:
 
-xlayer is not intended to be:
+```python
+from examples.approved_set_value import edit_one_cell
+from xlayer import SetValue
 
-- a replacement for `openpyxl`, `pandas`, or `XlsxWriter` for general workbook
-  reading, analysis, or generation;
-- a spreadsheet calculation engine;
-- an AI model, prompt framework, or natural-language planner;
-- a source of financial, accounting, or industry-specific truth;
-- a live Microsoft Excel controller;
-- a promise of safe arbitrary OOXML mutation; or
-- a mechanism for partially applying a rejected change.
-
-For broad workbook generation or direct manipulation, existing libraries remain
-the right tool. xlayer is for workflows where preview, refusal, atomicity,
-verification, and auditability matter more than breadth.
-
-## Requirements
-
-Python 3.11 or newer. No runtime dependencies.
-
-## Development
-
-```bash
-git clone https://github.com/YCBytes/xlayer.git
-cd xlayer
-python -m venv .venv
-.venv/bin/python -m pip install -e ".[dev]"
+result = edit_one_cell(
+    "tests/fixtures/test_workbook_7_write_v11_edges.xlsx",
+    "updated.xlsx",  # must not already exist
+    SetValue("edges", "F1", 44),
+    permitted=True,  # explicit application permission for this demonstration only
+)
+print(result.to_dict())
 ```
 
-```bash
-.venv/bin/ruff check .          # lint
-.venv/bin/ruff format --check . # formatting
-.venv/bin/mypy                  # strict type checking
-.venv/bin/pytest                # tests
-```
+The example store is trusted demonstration code, not user authentication. It
+denies unrecorded/mismatched claims and does not auto-grant elevated permissions.
+In a real application, show the preview and obtain an independent decision
+before recording approval. Receipt persistence belongs to the application.
+
+## Documentation
+
+- [API](docs/api.md): supported imports, bounded facts, lifecycle and approval.
+- [Support and limitations](docs/support.md): targets, refusals, resource/security
+  boundaries and what verification does not prove.
+- [Changelog](CHANGELOG.md): versioned support changes.
+
+Serialized evidence can contain workbook content and local paths. The application
+owns access control and persistence. Nothing is logged or uploaded implicitly.
 
 ## License
 

@@ -1,14 +1,9 @@
 """Structured refusals and the exception boundary.
 
-Private until slice 1 ships: the module is named ``_errors`` so the public
-namespace stays empty ahead of the promotion gates, and will be renamed to
-``errors`` as a deliberate export decision when the slice completes.
-
-The rule, from the slice 1 contract: an exception is raised only when no
-session or result object can exist — opening a workbook, or misusing the API
-itself. Every operation on an existing session returns a structured
-:class:`Refusal` instead of raising, so a caller can branch on stable codes
-rather than parse exception strings.
+Supported classes are exported from the package root; this implementation
+module remains private. Operational opening failures raise WorkbookOpenError;
+other operational failures are Refusal results. Programming/closed-use errors
+raise, and unexpected failures clean up ownership and propagate unchanged.
 """
 
 from __future__ import annotations

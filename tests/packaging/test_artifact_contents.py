@@ -33,17 +33,18 @@ _HOME_PATH = re.compile(
 )
 
 # Everything the wheel may contain outside its .dist-info metadata directory.
-# Slice 1 adds the refusal envelope and the internal archive, package,
-# workbook-registry, shared-string, styles, text-decode, and worksheet
-# layers plus the managed read-only coordinator; all are underscore-prefixed
-# and nothing is exported publicly
-# until the full slice passes its gates.
+# Public facades and the reviewed engine ship together. All implementation
+# modules stay underscore-prefixed; supported classes are exported at the root.
 WHEEL_PAYLOAD = frozenset(
     {
         "xlayer/__init__.py",
         "xlayer/py.typed",
         "xlayer/_errors.py",
         "xlayer/_workbook.py",
+        "xlayer/_public_workbook.py",
+        "xlayer/_public_proposal.py",
+        "xlayer/_public_edits.py",
+        "xlayer/_inspection.py",
         "xlayer/_dependencies.py",
         "xlayer/_canonical.py",
         "xlayer/_edits.py",
@@ -74,16 +75,29 @@ WHEEL_PAYLOAD = frozenset(
 # What the sdist may contain, after the top-level version directory is
 # stripped. Exact filenames and directory prefixes are distinguished so that,
 # for example, "LICENSE" cannot accidentally admit "LICENSE2". Nothing under
-# docs/ is listed: shipping documentation is a deliberate decision, so new
-# docs must be added here before the gate will let them through.
-SDIST_ALLOWED_FILES = frozenset(
+# docs/examples directory is broadly listed: additions require exact filenames.
+PUBLIC_FILES = frozenset(
     {
-        "LICENSE",
         "README.md",
         "pyproject.toml",
-        "PKG-INFO",
-        ".gitignore",
+        "CONTRIBUTING.md",
+        "CHANGELOG.md",
+        "docs/api.md",
+        "docs/support.md",
+        "examples/approved_set_value.py",
     }
+)
+SDIST_ALLOWED_FILES = (
+    frozenset(
+        {
+            "LICENSE",
+            "README.md",
+            "pyproject.toml",
+            "PKG-INFO",
+            ".gitignore",
+        }
+    )
+    | PUBLIC_FILES
 )
 SDIST_ALLOWED_DIR_PREFIXES = ("src/", "tests/")
 
@@ -129,6 +143,7 @@ REQUIRED_SDIST_FILES = (
         }
     )
     | {f"src/{payload_path}" for payload_path in WHEEL_PAYLOAD}
+    | PUBLIC_FILES
     | {
         "tests/fixtures/test_workbook_2_registry.xlsx",
         "tests/fixtures/test_workbook_2_registry.expected.json",
@@ -146,6 +161,12 @@ REQUIRED_SDIST_FILES = (
         "tests/packaging/test_workbook_smoke.py",
         "tests/packaging/test_dependency_smoke.py",
         "tests/packaging/test_transaction_smoke.py",
+        "tests/packaging/test_public_workflow.py",
+        "tests/unit/test_public_edits.py",
+        "tests/unit/test_public_workbook.py",
+        "tests/unit/test_public_inspections.py",
+        "tests/unit/test_public_impact.py",
+        "tests/unit/test_public_transactions.py",
         "tests/__init__.py",
         "tests/unit/__init__.py",
         "tests/unit/_dependency_cases.py",
@@ -207,6 +228,10 @@ def _assert_current_sources(wheel: Mapping[str, bytes], sdist: Mapping[str, byte
         current = (REPO_ROOT / "src" / name).read_bytes()
         assert wheel.get(name) == current, f"wheel source bytes differ: {name}"
         assert sdist.get(f"src/{name}") == current, f"sdist source bytes differ: {name}"
+    for name in PUBLIC_FILES:
+        assert sdist.get(name) == (REPO_ROOT / name).read_bytes(), (
+            f"sdist public source bytes differ: {name}"
+        )
 
 
 def _assert_published_payload(payload: Mapping[str, bytes]) -> None:
@@ -252,6 +277,25 @@ def test_changed_artifact_byte_is_detected() -> None:
     sdist["src/xlayer/_ooxml/formula.py"] += b"\n# changed\n"
     with pytest.raises(AssertionError, match="source bytes"):
         _assert_current_sources(wheel, sdist)
+
+
+@pytest.mark.parametrize("name", sorted(PUBLIC_FILES))
+def test_public_docs_and_example_cannot_silently_drop_or_change(name: str) -> None:
+    wheel = {n: (REPO_ROOT / "src" / n).read_bytes() for n in WHEEL_PAYLOAD}
+    sdist = {f"src/{n}": payload for n, payload in wheel.items()}
+    sdist.update({n: (REPO_ROOT / n).read_bytes() for n in PUBLIC_FILES})
+    sdist[name] += b"\nchanged\n"
+    with pytest.raises(AssertionError, match="public source bytes"):
+        _assert_current_sources(wheel, sdist)
+    required = set(REQUIRED_SDIST_FILES) - {name}
+    with pytest.raises(AssertionError, match="missing required files"):
+        _assert_required_sdist(required)
+
+
+def test_doc_and_example_allowlist_is_exact_not_prefix() -> None:
+    for path in ("docs/private.md", "docs/api.md.bak", "examples/unreviewed.py", "CHANGELOG.md2"):
+        assert path not in SDIST_ALLOWED_FILES
+        assert not path.startswith(SDIST_ALLOWED_DIR_PREFIXES)
 
 
 @pytest.mark.parametrize(

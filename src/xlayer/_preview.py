@@ -1,4 +1,4 @@
-"""Private immutable preview evidence; facts are not approval or recalculation."""
+"""Immutable preview evidence; facts are not approval or recalculation."""
 
 from __future__ import annotations
 

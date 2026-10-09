@@ -79,9 +79,8 @@ _RECOVER_UNENCRYPTED = ({"action": "resave_as_unencrypted_xlsx"},)
 class ArchiveLimits:
     """Resource ceilings enforced before decompression and tree building.
 
-    Module-level defaults are the public contract; construction with lowered
-    values is intended only for security tests, which use small crafted
-    archives instead of genuinely large ones.
+    The public workbook boundary allows these defaults or lower positive
+    ceilings. Limits are admission bounds, not peak-memory guarantees.
     """
 
     max_file_bytes: int = 100 * 1024 * 1024
@@ -94,7 +93,7 @@ class ArchiveLimits:
     def __post_init__(self) -> None:
         for spec in fields(self):
             value = getattr(self, spec.name)
-            if not isinstance(value, int) or value <= 0:
+            if type(value) is not int or value <= 0:
                 raise ValueError(f"{spec.name} must be a positive integer, got {value!r}")
 
 

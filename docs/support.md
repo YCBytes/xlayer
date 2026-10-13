@@ -43,6 +43,23 @@ scope and unfinished work are surfaced. Complete, partial and unknown differ.
 Samples are not full dependent lists; grouped issues are not all full diagnostics
 or alternate paths.
 
+Explanation checking supports saved fields, explicit cell-group comparisons and
+positive membership in published dependency samples. A checked report includes
+every submitted supported claim and required fact, with its source/scope binding
+and evidence links. A mismatch or unmet requirement refuses the whole submission.
+Formula-text equality does not establish mathematical equivalence, and a saved
+cache does not establish a current calculated result. Arbitrary AI prose,
+counterfactuals and business conclusions are outside this claim language.
+
+Applications authorize complete observations and control publication. Selected
+cells can disclose formulas/format/merge context; inventory includes hidden tabs;
+impact includes bounded cross-sheet evidence. This does not isolate internal
+parsing by cell or restrict other read tools. Rendered reports are plain text,
+so applications must escape workbook content for their display context. Clear
+the current publishable report before each revised submission; an earlier success
+does not validate a later refused answer. Historical reports retain their own
+snapshot identity, without a guarantee of current file freshness.
+
 Verification freshly parses staged output, checks declared supported changes,
 non-target scalar/structural facts, part inventory, unmodified bytes and reviewed
 ZIP-record preservation. It is not a benchmark golden, accounting check, formula
@@ -78,6 +95,11 @@ Public callers can lower ceilings, not raise them.
 
 Reads default to 128 requested cells and 1 MiB canonical response. Impact
 presentation bounds each diagnostic identity to 1 MiB before hashing.
+Explanations default to 128 claims, 128 explicitly scoped cells, 128 required
+facts, 512 cell comparisons, and one optional impact root. Request/scope,
+observations and complete reports are separately bounded to 1 MiB; diagnostic
+details to 64 KiB and 16 examples. See [the API](api.md#checking-explanation-claims)
+for configurable fields and minimums.
 Canonical transaction evidence is bounded to 16 MiB, with 1–100 edits.
 These are admission/work/response limits, not peak-memory/CPU-time/simultaneous
 budget/denial-of-service/model-token guarantees. A bounded read can materialize

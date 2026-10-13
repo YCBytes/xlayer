@@ -18,6 +18,13 @@ from xlayer._canonical import (
 )
 from xlayer._dependencies import DEFAULT_IMPACT_LIMITS, ImpactLimits, _canonical_address, _to_json
 from xlayer._errors import ClosedWorkbookError, Refusal
+from xlayer._explanation import CheckedExplanation, check_explanation
+from xlayer._explanation_contract import (
+    DEFAULT_EXPLANATION_LIMITS,
+    ExplanationLimits,
+    ExplanationRequest,
+    ExplanationScope,
+)
 from xlayer._inspection import (
     DEFAULT_READ_LIMITS,
     Inspection,
@@ -189,6 +196,25 @@ class Workbook:
         except BaseException:
             self.close()
             raise
+
+    def check_explanation(
+        self,
+        request: ExplanationRequest,
+        *,
+        scope: ExplanationScope,
+        limits: ExplanationLimits = DEFAULT_EXPLANATION_LIMITS,
+        read_limits: ReadLimits = DEFAULT_READ_LIMITS,
+        impact_limits: ImpactLimits = DEFAULT_IMPACT_LIMITS,
+    ) -> CheckedExplanation | Refusal:
+        """Check structured saved facts against this snapshot and explicit scope."""
+        return check_explanation(
+            self,
+            request,
+            scope=scope,
+            limits=limits,
+            read_limits=read_limits,
+            impact_limits=impact_limits,
+        )
 
     def propose(
         self,

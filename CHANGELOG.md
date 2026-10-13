@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Check structured saved-fact claims with `Workbook.check_explanation()` and
+  application-owned scopes, required facts and resource limits.
+- Return immutable reports with typed evidence links, deterministic text and
+  explicit qualifications; refuse unsupported, contradictory or incomplete claims.
+- Add a provider-free publication example and installed-package checks.
+
 ## 0.1.0a1 — experimental public API
 
 - Supported root imports for managed sessions, bounded stored-fact reads,

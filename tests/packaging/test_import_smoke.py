@@ -42,6 +42,10 @@ def test_exact_alpha_surface_after_internal_imports() -> None:
         "ArchiveLimits",
         "ImpactLimits",
         "ReadLimits",
+        "ExplanationScope",
+        "ExplanationRequest",
+        "ExplanationLimits",
+        "CheckedExplanation",
     }
     for name in ("_workbook", "_proposal", "_ooxml.archive", "_ooxml.sheet", "_dependencies"):
         importlib.import_module(f"xlayer.{name}")

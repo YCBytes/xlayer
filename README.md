@@ -12,6 +12,8 @@ certification. Building this version does not publish it to PyPI.
 
 - Bounded sheet inventory, explicit cell reads and potential-reference impact
   summaries with coverage limitations intact.
+- Check structured saved-fact claims and return evidence-linked explanations
+  with explicit scope, required facts and uncertainty.
 - `SetValue` for existing supported inputs: exact Python `int`, finite `float`,
   `bool` or `str`, in one worksheet per transaction.
 - Application-owned approval bound to the exact source, proposal and preview.
@@ -81,6 +83,8 @@ before recording approval. Receipt persistence belongs to the application.
 
 ## Documentation
 
+- [Checking explanation claims](docs/api.md#checking-explanation-claims) and the
+  [publication example](examples/explain_saved_facts.py).
 - [API](docs/api.md): supported imports, bounded facts, lifecycle and approval.
 - [Support and limitations](docs/support.md): targets, refusals, resource/security
   boundaries and what verification does not prove.

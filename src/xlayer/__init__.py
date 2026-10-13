@@ -10,6 +10,8 @@ __version__ = "0.1.0a1"
 from xlayer._approval import Approval, VerifiedApproval
 from xlayer._dependencies import ImpactLimits
 from xlayer._errors import ClosedWorkbookError, Refusal, WorkbookOpenError, XlayerError
+from xlayer._explanation import CheckedExplanation
+from xlayer._explanation_contract import ExplanationLimits, ExplanationRequest, ExplanationScope
 from xlayer._inspection import Inspection, ReadLimits
 from xlayer._ooxml.archive import ArchiveLimits
 from xlayer._preview import Preview
@@ -21,7 +23,11 @@ from xlayer._receipt import Receipt
 __all__ = [
     "Approval",
     "ArchiveLimits",
+    "CheckedExplanation",
     "ClosedWorkbookError",
+    "ExplanationLimits",
+    "ExplanationRequest",
+    "ExplanationScope",
     "ImpactLimits",
     "Inspection",
     "Preview",

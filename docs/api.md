@@ -20,6 +20,10 @@ from xlayer import (
     ArchiveLimits,
     ImpactLimits,
     ReadLimits,
+    ExplanationScope,
+    ExplanationRequest,
+    ExplanationLimits,
+    CheckedExplanation,
     __version__,
 )
 ```
@@ -69,6 +73,133 @@ normalized uppercase within A1–XFD1048576. No ranges, `$`, whitespace, sheet
 prefixes or Unicode digits. `read_cells` takes a non-string sequence, captures
 it before parsing, rejects empty/duplicate canonical addresses, and keeps request
 order. Malformed worksheets refuse the whole read, never fabricate missing cells.
+
+## Checking explanation claims
+
+`Workbook.check_explanation()` checks structured claims against its loaded
+snapshot. Success means every supported claim agrees with the captured saved
+facts and every application-required selector is covered. Formula caches remain
+unverified. Calculation, business conclusions and arbitrary model prose are
+outside this contract.
+
+```python
+scope = ExplanationScope(
+    {"Inputs": ["C12"]},
+    required_facts=[{"family": "cell", "sheet": "Inputs", "address": "C12", "field": "raw"}],
+)
+with Workbook.open("model.xlsx") as book:
+    request = ExplanationRequest.from_dict(
+        {
+            "schema_version": "1.0",
+            "explanation_contract_version": "1.0",
+            "source_fingerprint": book.source_fingerprint,
+            "scope_digest": scope.scope_digest,
+            "claims": [
+                {
+                    "id": "input",
+                    "kind": "fact",
+                    "selector": {
+                        "family": "cell",
+                        "sheet": "Inputs",
+                        "address": "C12",
+                        "field": "raw",
+                    },
+                    "expected": "100",
+                }
+            ],
+        }
+    )
+    if isinstance(request, Refusal):
+        print(request.code)
+    else:
+        result = book.check_explanation(request, scope=scope)
+        print(result.code if isinstance(result, Refusal) else result.render_text())
+```
+
+The application constructs `ExplanationScope(cells, include_inventory=False,
+impact_root=None, required_facts=())`. `cells` maps exact sheet names to ordered
+explicit addresses, at most 128 across sheets. Optional `impact_root` is one
+`(sheet, address)` pair. Required facts are selectors without expected answers.
+Scope must authorize at least one cell, inventory or impact root. `to_dict()`
+returns a detached versioned object; `scope_digest` identifies the entire scope.
+
+Scope authorizes **complete observations**. Cell observations include formula,
+format and merge context; inventory includes hidden tabs; impact includes its
+cross-sheet samples, reference paths and diagnostics. Internal parsers can read
+unselected cells. Applications must separately govern other tools and data access.
+
+`ExplanationRequest.from_dict(mapping, *, limits=ExplanationLimits())` and
+`from_json(str_or_utf8_bytes, *, limits=ExplanationLimits())` return a request or
+`Refusal`. JSON rejects duplicate keys. Unknown fields, malformed content, invalid
+Unicode and non-finite numbers refuse. Native argument errors raise. Direct
+request/result construction is unsupported. `json_schema(*, limits=...)` returns
+the neutral, field-dependent schema for a model or other producer; native checks
+add canonical-cell uniqueness, exact Python integer types and aggregate bounds.
+
+Claims have unique ASCII `id` labels (letters, digits, `_`, `.` or `-`, 1–64 chars):
+
+| Kind | Required fields besides `id` and `kind` | Check |
+| --- | --- | --- |
+| `fact` | `selector`, `expected` | One saved field |
+| `all_equal` | `cells`, `field`, `expected` | Every explicitly listed `{sheet,address}` member; 2–128 unique cells |
+| `known_dependent` | `target`, `relation` | Positive membership in the root's published `direct` or `transitive` sample |
+
+Selectors contain `family` and `field`, plus `sheet` for cell/sheet facts and
+`address` for cell facts. Supported fields:
+
+| Family | Fields |
+| --- | --- |
+| `cell` | `presence`, `stored_type`, `value_kind`, `raw`, `stored_value`, `value_source`, `formula_result_status`, `has_formula`, `formula_text`, `formula_kind`, `shared_master_text`, `format_temporal_kind`, `merge_role` |
+| `inventory` | `sheets`, `sheet_count`, `active_tab`, `date1904`, `defined_name_count` |
+| `sheet` | `state`, `kind`, `tab_index` |
+| `impact` | `analysis_status`, `known_direct_count`, `known_transitive_count`, `known_union_count`, `exact_total_count`, `scope`, `numerical_effects_evaluated` |
+
+Expected types/classifications follow the inspection fields below; the schema
+enumerates them. Counts/indices require nonnegative exact integers; nullable
+impact counts and `active_tab` accept null. `has_formula` is a bool even for a
+shared follower without its own expression. `inventory.sheets` requires complete,
+ordered `{name,state,kind,tab_index}` records. `stored_value` permits exact numeric
+int/float equality, never bool-number equality or rounding. Text compares exactly.
+Only accepted fact/group members cover required selectors. Sample absence means
+insufficient evidence, including when analysis is complete.
+
+```text
+book.check_explanation(request, *, scope, limits=ExplanationLimits(),
+                       read_limits=ReadLimits(), impact_limits=ImpactLimits())
+    -> CheckedExplanation | Refusal
+```
+
+`ExplanationLimits` can lower these defaults: `max_claims=128`,
+`max_required_facts=128`, `max_cells=128`, `max_cell_comparisons=512`,
+`max_request_bytes=1048576`, `max_evidence_bytes=1048576`,
+`max_report_bytes=1048576`, `max_diagnostic_bytes=65536`, `max_diagnostics=16`.
+Values are positive exact integers; diagnostic bytes require at least 2. Each
+group member costs one comparison, including repeated use across claims. Request
+bytes also bound the scope. Evidence/report ceilings cover complete encoded
+objects; report bytes include rendered text and digest. These bounds supplement
+read/impact/archive limits and do not promise a CPU or peak-memory ceiling.
+
+A `CheckedExplanation` exposes frozen `.evidence`, detached `to_dict()`,
+`canonical_json()` bytes, `report_digest`, and deterministic `render_text()`.
+The versioned report binds source, scope, request, observations and typed witness
+paths, and retains actual limits and machine-readable qualifications. Canonical
+JSON uses sorted keys, ASCII escaping and SHA-256 identities. Digests identify
+content; they do not grant authority or authenticate imported reports.
+
+Refusals include `invalid_explanation_request`, `unsupported_explanation_claim`,
+`explanation_binding_mismatch`, `explanation_scope_exceeded`,
+`explanation_evidence_missing`, `explanation_contradicted`,
+`explanation_requirements_unmet` and `explanation_limit_exceeded`. Underlying
+read codes remain recognizable with bounded, disclosure-safe diagnostics. No
+refusal contains a successful subset. Unexpected failures close the session;
+ordinary refusals leave it open. Reports remain readable after close.
+
+Before each submission, clear the application's current report, including before
+parsing. Clear it when changing the active source, scope, limits or publication
+policy. Publish only the latest success. Historical reports remain valid for
+their original bindings. See [the provider-free example](../examples/explain_saved_facts.py).
+Rendered output is plain text: escape it for your UI and keep workbook text
+untrusted. An accepted report does not certify additional model-written prose.
 
 ## Inspection
 

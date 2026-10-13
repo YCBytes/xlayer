@@ -45,6 +45,9 @@ WHEEL_PAYLOAD = frozenset(
         "xlayer/_public_proposal.py",
         "xlayer/_public_edits.py",
         "xlayer/_inspection.py",
+        "xlayer/_explanation_contract.py",
+        "xlayer/_explanation.py",
+        "xlayer/_explanation_render.py",
         "xlayer/_dependencies.py",
         "xlayer/_canonical.py",
         "xlayer/_edits.py",
@@ -85,6 +88,7 @@ PUBLIC_FILES = frozenset(
         "docs/api.md",
         "docs/support.md",
         "examples/approved_set_value.py",
+        "examples/explain_saved_facts.py",
     }
 )
 SDIST_ALLOWED_FILES = (
@@ -162,6 +166,9 @@ REQUIRED_SDIST_FILES = (
         "tests/packaging/test_dependency_smoke.py",
         "tests/packaging/test_transaction_smoke.py",
         "tests/packaging/test_public_workflow.py",
+        "tests/packaging/test_explanation_smoke.py",
+        "tests/unit/test_explanation_contract.py",
+        "tests/unit/test_explanation.py",
         "tests/unit/test_public_edits.py",
         "tests/unit/test_public_workbook.py",
         "tests/unit/test_public_inspections.py",

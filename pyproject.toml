@@ -52,6 +52,7 @@ only-include = [
   "docs/api.md",
   "docs/support.md",
   "examples/approved_set_value.py",
+  "examples/explain_saved_facts.py",
   "pyproject.toml",
 ]
 
